@@ -17,6 +17,9 @@ struct target_profile {
     uint32_t task_tasks;
     uint32_t task_pid;
     uint32_t task_tgid;
+    uint32_t task_security;
+    uint32_t task_fake_sec;
+    uint32_t task_group_leader;
     uint32_t cred_security;
     const char *qsee_context;
     uint32_t cred_ids;

