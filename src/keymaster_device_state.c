@@ -292,6 +292,7 @@ int keymaster_device_state_main(int argc, char **argv)
     ion_heaps();
 
     lib = dlopen("/vendor/lib64/libQSEEComAPI.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!lib) lib = dlopen("/data/local/tmp/libQSEEComAPI.so", RTLD_NOW | RTLD_GLOBAL);
     if (!lib) lib = dlopen("libQSEEComAPI.so", RTLD_NOW | RTLD_GLOBAL);
     if (!lib) { fprintf(stderr, "[lib] dlopen: %s\n", dlerror()); goto out; }
 
