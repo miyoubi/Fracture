@@ -64,7 +64,9 @@ git -C "$KSU_DIR" fetch origin --tags
 if [ -n "$KSU_COMMIT" ]; then
     git -C "$KSU_DIR" checkout --quiet "$KSU_COMMIT"
 else
-    git -C "$KSU_DIR" checkout --quiet "$KSU_REF"
+    # Follow the fetched remote ref: staging is force-updated, and the local
+    # branch can be stale (e.g. e2f2e397 vs origin/staging 4269960c).
+    git -C "$KSU_DIR" checkout --quiet -B "$KSU_REF" "origin/$KSU_REF"
 fi
 KSU_REV=$(git -C "$KSU_DIR" rev-parse --short HEAD)
 log "KernelSU $KSU_REV ($(git -C "$KSU_DIR" describe --tags --always 2>/dev/null || echo "$KSU_REV"))"
@@ -132,57 +134,10 @@ if [ ! -f "$KERNEL_DIR/security/selinux/flask.h" ] || \
     log "generated flask.h / av_permissions.h"
 fi
 
-# 6. path_umount weak extern -> runtime lookup (no GOT relocs on 4.19)
-UMOUNT_C="$KERNEL_DIR/KernelSU/kernel/feature/kernel_umount.c"
-python3 - "$UMOUNT_C" <<'PY'
-import sys
-path = sys.argv[1]
-s = open(path).read()
-if "path_umount_fn" in s:
-    print("[lkm] path_umount runtime lookup already present")
-    raise SystemExit(0)
-# Only skip the workaround when the module path really no longer references
-# the weak path_umount (newer upstream ifdefs the whole branch).  The
-# 4269960c staging still has the weak extern, so it must be patched.
-if "#ifdef MODULE" in s and "ksyscall(umount" in s and \
-        "extern int path_umount(struct path *path, int flags) __weak;" not in s:
-    print("[lkm] kernel_umount.c already uses the module syscall path; no patch needed")
-    raise SystemExit(0)
-old = '''static __nocfi inline void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
-{
-\textern int path_umount(struct path *path, int flags) __weak;
-\tint err;
-#ifdef MODULE
-\tassume(!path_umount);
-#endif
-\tif (!path_umount)
-\t\tgoto syscall;
-
-\terr = path_umount(path, flags);
-\tgoto out;'''
-new = '''static __nocfi inline void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
-{
-\tstatic int (*path_umount_fn)(struct path *path, int flags);
-\tint err;
-\t/*
-\t * A weak extern for path_umount makes the compiler emit GOT
-\t * relocations (R_AARCH64_ADR_GOT_PAGE / R_AARCH64_LD64_GOT_LO12_NC),
-\t * which the 4.19 arm64 module loader does not implement. Resolve
-\t * the optional backport at runtime instead.
-\t */
-\tif (!path_umount_fn)
-\t\tpath_umount_fn = (void *)kallsyms_lookup_name("path_umount");
-\tif (!path_umount_fn)
-\t\tgoto syscall;
-
-\terr = path_umount_fn(path, flags);
-\tgoto out;'''
-if old not in s:
-    print("[lkm] error: path_umount block not found; source layout changed", file=sys.stderr)
-    raise SystemExit(1)
-open(path, "w").write(s.replace(old, new))
-print("[lkm] applied path_umount runtime lookup")
-PY
+# 6. path_umount
+# The staging source wraps the weak path_umount in #ifndef MODULE, so the
+# module always takes the ksyscall(umount) path and emits no GOT relocations.
+# No source patch is needed; older sources would need the runtime lookup.
 
 # 7. Build
 rm -f "$KERNEL_DIR/KernelSU/kernel/ksu.o" \
@@ -200,9 +155,6 @@ KO="$KERNEL_DIR/KernelSU/kernel/kernelsu.ko"
 # 8. Verify + stage
 if "$NDK_BIN/llvm-readelf" -r "$KO" 2>/dev/null | grep -qiE 'GOT|AUTH'; then
     die "kernelsu.ko still has GOT/PAuth relocations (clang flags?)"
-fi
-if "$NDK_BIN/llvm-nm" -u "$KO" 2>/dev/null | grep -q ' path_umount$'; then
-    die "kernelsu.ko still references path_umount (runtime patch failed?)"
 fi
 
 mkdir -p "$OUT"
