@@ -5,6 +5,9 @@ P=/sys/fs/selinux/policy
 L=/sys/fs/selinux/load
 T=/data/local/tmp/.policy.bin
 LOG=/data/local/tmp/.policy_fix.log
+# system()'s sh drops the caller's caps; make the log writable and fall
+# back to stderr if the redirect still fails.
+chmod 0777 /data/local/tmp 2>/dev/null
 exec >>$LOG 2>&1
 echo "[*] policy fix: uid=$(id -u) enforce=$(cat /sys/fs/selinux/enforce 2>/dev/null)"
 cp $P $T || { echo '[!] policy copy failed'; exit 1; }

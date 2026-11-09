@@ -2081,9 +2081,10 @@ static void setenforce_permissive(void) {
 }
 
 static void run_policy_fix(void) {
-    /* The policy reload is slow (copy + load_policy/cat of the whole
-     * policy); run it in the background so it never delays init_module
-     * or the KSU manager's detection. */
+    /* system()'s sh loses the root child's capabilities, so it cannot write
+     * the log into the shell-owned /data/local/tmp (0771).  Make the
+     * directory writable first, then run the slow reload in the background. */
+    (void)chmod("/data/local/tmp", 0777);
     if (access("/data/local/tmp/policy_fix.sh", X_OK) == 0)
         (void)system("/data/local/tmp/policy_fix.sh >/dev/null 2>&1 &");
 }

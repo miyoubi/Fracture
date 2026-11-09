@@ -141,6 +141,11 @@ s = open(path).read()
 if "path_umount_fn" in s:
     print("[lkm] path_umount runtime lookup already present")
     raise SystemExit(0)
+# Newer staging sources ifdef the whole path_umount branch for modules and
+# always use ksyscall(umount), which needs no GOT workaround.
+if "#ifdef MODULE" in s and "ksyscall(umount" in s:
+    print("[lkm] kernel_umount.c already uses the module syscall path; no patch needed")
+    raise SystemExit(0)
 old = '''static __nocfi inline void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
 {
 \textern int path_umount(struct path *path, int flags) __weak;
