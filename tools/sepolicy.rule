@@ -1,0 +1,4 @@
+allow shell ctl_stop_prop:property_service set;
+allow shell ctl_start_prop:property_service set;
+allow shell usb_control_prop:property_service set;
+allow shell usb_prop:property_service set;

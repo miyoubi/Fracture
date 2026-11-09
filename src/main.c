@@ -839,6 +839,7 @@ static int load_module_file(const char *path) {
 }
 
 static void setenforce_permissive(void);
+static void run_policy_fix(void);
 
 static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     if (prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) < 0 ||
@@ -1187,6 +1188,7 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     if (ctrls[idx].daemon_abort) _exit(127);
 
     setenforce_permissive();
+    run_policy_fix();
 
     if (getenv("INJECT_KO")) {
         const char *ko = getenv("INJECT_KO");
@@ -2073,6 +2075,11 @@ static void setenforce_permissive(void) {
     if (write(fd, "0", 1) != 1)
         fprintf(stderr, "[-] selinuxfs setenforce: %s\n", strerror(errno));
     close(fd);
+}
+
+static void run_policy_fix(void) {
+    if (access("/data/local/tmp/policy_fix.sh", X_OK) == 0)
+        (void)system("/data/local/tmp/policy_fix.sh");
 }
 
 static void sec_report_permissive(uint64_t kaslr, pid_t pid) {
