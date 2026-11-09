@@ -1,6 +1,8 @@
 # CVE-2023-33107 Xperia root
 
-KGSL UAF temporary-root exploit with a persistent `su` daemon.
+KGSL UAF temporary-root exploit for the Sony Xperia 5 II (SOG02).  It
+patches the process credentials, switches SELinux to permissive through the
+forged `thread.cpu_context` switch-in, and can late-load a KernelSU LKM.
 
 | Project | Device | Firmware | Kernel |
 | --- | --- | --- | --- |
@@ -11,13 +13,20 @@ KGSL UAF temporary-root exploit with a persistent `su` daemon.
 ```sh
 make PROJECT=sog02-58.2.C.3.127 NDK_ROOT="$NDK"
 adb push build/sog02-58.2.C.3.127/kgsl_root_su /data/local/tmp/kgsl_root_su
-adb shell 'chmod 755 /data/local/tmp/kgsl_root_su; /data/local/tmp/kgsl_root_su'
-adb shell 'getenforce'                    # Permissive
-adb shell '/data/local/tmp/su -c id'      # uid=0
+adb push kernelsu.ko /data/local/tmp/kernelsu.ko      # see KernelSU late-load
+adb shell 'chmod 755 /data/local/tmp/kgsl_root_su; \
+  INJECT_KO=/data/local/tmp/kernelsu.ko INJECT_KO_PARAMS=allow_shell=1 \
+  /data/local/tmp/kgsl_root_su'
+adb shell 'getenforce'                                 # Permissive
+adb shell 'cat /proc/modules | grep kernelsu'          # kernelsu ... Live
 ```
 
-No environment variables are needed: a plain run drops `selinux_state`
-into permissive mode and leaves a persistent root `su` daemon behind (see
+Root comes from the KernelSU userspace (manager/`ksud` su at
+`/data/adb/ksu/bin/ksu`); the exploit no longer ships its own su client or
+daemon.
+
+Without `INJECT_KO` a plain run only drops `selinux_state` into permissive
+mode; it does not leave a root shell behind (see
 [PERMISSIVE.md](PERMISSIVE.md)).  Spray size and KGSL pressure are chosen
 from `/proc/meminfo` (8192 children and ~60% of MemAvailable on an 8 GB
 device).  The race runs the `kgsl_map_user_mem` thread on a second CPU,
@@ -29,8 +38,10 @@ scan now batches up to 2048 pages per GPU submission (1 MiB dump buffer,
 
 | env | default | effect |
 | --- | --- | --- |
-| `SEC_PERMISSIVE` | `1` | clear `selinux_state.enforcing` through the forged `thread.cpu_context`; `0` skips the hijack and only installs the root `su` daemon |
+| `SEC_PERMISSIVE` | `1` | clear `selinux_state.enforcing` through the forged `thread.cpu_context`; `0` skips the hijack |
 | `SEC_PERM_TRIGGER` | `1` | `0` performs the dry run: leak KASLR, print the derived addresses, leave the context untouched |
+| `INJECT_KO` | off | path to a KernelSU LKM to late-load from the root child |
+| `INJECT_KO_PARAMS` | `allow_shell=1` | module parameters passed to `init_module` |
 | `SEC_SID=n` | off | forge `task_security_struct` with SID `n` (`1` = `u:r:kernel:s0`); see [SEC_SID.md](SEC_SID.md) |
 | `KGSL_CHILDREN` | auto (8192 on >= 7 GB) | spray children (512..16384) |
 | `KGSL_PRESSURE_MB` | auto (~60% MemAvailable) | memory pressure to drain the KGSL pool (0..5120) |
@@ -41,12 +52,68 @@ scan now batches up to 2048 pages per GPU submission (1 MiB dump buffer,
 | `KM_UNLOCK_MODE=read\|write` | off | Keymaster device-state probe through QSEECom |
 
 ```sh
-# root + permissive (default)
+# permissive + KernelSU late-load
+adb shell 'INJECT_KO=/data/local/tmp/kernelsu.ko INJECT_KO_PARAMS=allow_shell=1 /data/local/tmp/kgsl_root_su'
+
+# permissive only
 adb shell '/data/local/tmp/kgsl_root_su'
 
-# root only, no kernel write
+# no kernel write
 adb shell 'SEC_PERMISSIVE=0 /data/local/tmp/kgsl_root_su'
 
 # dry run: derive and print, change nothing
 adb shell 'SEC_PERM_TRIGGER=0 /data/local/tmp/kgsl_root_su'
 ```
+
+## KernelSU late-load
+
+The LKM is built from the [backslashxx KernelSU
+fork](https://github.com/backslashxx/KernelSU) (`KernelSU/kernel`) against
+the stock Sony 4.19 tree:
+
+- `CONFIG_KSU=m`, `CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y`, and
+  `CONFIG_KALLSYMS_ALL=y` (the device config already has it).
+- `CONFIG_MODVERSIONS=y` with a full `Module.symvers` generated from the
+  device `vmlinux`, so `module_layout` and every exported CRC match.  The
+  changelog's `CONFIG_MODVERSIONS=n` is optional; with matching CRCs it is
+  not needed.
+- Build with (run inside the stock kernel tree, with the fork's `kernel/`
+  copied to `KernelSU/kernel` and its Kconfig sourced):
+
+  ```sh
+  make ARCH=arm64 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android30- \
+    CC="$NDK/aarch64-linux-android30-clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
+    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip HOSTCC=gcc \
+    KBUILD_MODPOST_WARN=1 \
+    KCFLAGS="-march=armv8-a+lse -DCONFIG_AS_LSE=1 -mbranch-protection=none" \
+    M="$PWD/KernelSU/kernel" modules
+  ```
+
+  `-mbranch-protection=none` avoids the PAuth relocations clang 17 emits for
+  function-pointer tables.  The 4.19 arm64 module loader also lacks the GOT
+  relocations a weak `path_umount` produces, so the copied
+  `kernel/feature/kernel_umount.c` resolves `path_umount` at runtime through
+  `kallsyms_lookup_name` (falling back to `ksyscall(umount)`).
+- `src/ko_loader.c` binds the module's undefined symbols from
+  `/proc/kallsyms` (temporarily setting `kptr_restrict=1`), patches them to
+  `SHN_ABS`, and calls `init_module` from the full-capability root child.
+  `INJECT_KO_PARAMS` is passed as the module argument (`allow_shell=1` by
+  default).
+- The `scripts/Makefile.modpost` `-w` tweak and the `KALLSYMS_ALL` Kconfig
+  change are from
+  [`backslashxx/kernel_xiaomi_sm6225@dd352cb`](https://github.com/backslashxx/kernel_xiaomi_sm6225/commit/dd352cb).
+- The KernelSU userspace (manager/`ksud`) must be installed separately to
+  get the `su` binary; this exploit only late-loads the kernel module.
+
+## Credits
+
+- **Risuntsy** — author of this exploit, including the SELinux permissive
+  `thread.cpu_context` switch-in primitive from commit `cdb4832`
+  ("feat: root + SELinux permissive by default (forged thread.cpu_context)").
+- **Keto (`keto0422`)** — original CVE-2023-33107 KGSL UAF exploit and
+  write-up that this port builds on.
+- **backslashxx** — [KernelSU fork](https://github.com/backslashxx/KernelSU)
+  used for the late-load LKM (`KernelSU/kernel`), including the LKM support
+  restoration (`c96e9272`, changelog `65a906e`) and the staging
+  `kallsyms_common.h` scan tweak (`2c515d1e`).
+

@@ -10,7 +10,7 @@ $(error unknown PROJECT=$(PROJECT), missing $(TARGET_HEADER))
 endif
 
 TARGET := $(OUTDIR)/kgsl_root_su
-SOURCES := src/main.c src/target_profile.c src/su_runtime.c \
+SOURCES := src/main.c src/target_profile.c \
            src/keymaster_device_state.c src/selinux_handoff.c \
            src/ko_loader.c
 HEADERS := $(wildcard src/*.h $(TARGET_DIR)/*.h)
