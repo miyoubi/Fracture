@@ -104,6 +104,25 @@ the stock Sony 4.19 tree:
 - The KernelSU userspace (manager/`ksud`) must be installed separately to
   get the `su` binary; this exploit only late-loads the kernel module.
 
+### Building the LKM
+
+`tools/build_kernelsu_lkm.sh` automates the whole flow:
+
+```sh
+tools/build_kernelsu_lkm.sh                             # origin/staging (default)
+KSU_REF=master tools/build_kernelsu_lkm.sh              # a branch
+KSU_COMMIT=e2f2e397 tools/build_kernelsu_lkm.sh         # an exact commit
+VMLINUX=/path/vmlinux.elf tools/build_kernelsu_lkm.sh   # regenerate the full symvers
+```
+
+It clones/fetches `backslashxx/KernelSU` into `KernelSU/`, copies `kernel/`
+into `stockkernel_sony_sm8250-main/KernelSU/kernel`, wires the Kconfig and
+`CONFIG_KSU=m`, generates `compile.h`/`flask.h`, ensures the full device
+`Module.symvers` (via `gen_symvers.py`, using `VMLINUX` when supplied),
+re-applies the `path_umount` runtime lookup, builds with the LSE/PA flags,
+verifies that no GOT/PAuth relocations remain, and leaves the result at
+`build/<project>/kernelsu.ko`.
+
 ## Credits
 
 - **Risuntsy** — author of this exploit, including the SELinux permissive
