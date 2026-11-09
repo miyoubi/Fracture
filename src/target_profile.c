@@ -24,6 +24,15 @@ static const struct target_profile profile = {
     .cred_ids = TARGET_CRED_IDS,
     .cred_caps = TARGET_CRED_CAPS,
     .cap_last_cap = TARGET_CAP_LAST_CAP,
+    .kernel_text_va = TARGET_KERNEL_TEXT_VA,
+    .selinux_state_off = TARGET_SELINUX_STATE_OFF,
+    .selinux_word = TARGET_SELINUX_WORD,
+    .task_state = TARGET_TASK_STATE,
+    .task_cpu_context = TARGET_TASK_CPU_CONTEXT,
+    .task_fpsimd = TARGET_TASK_FPSIMD,
+    .switch_continuation_off = TARGET_SWITCH_CONTINUATION_OFF,
+    .gadget_store_off = TARGET_GADGET_STORE_OFF,
+    .gadget_switch_return_off = TARGET_GADGET_SWITCH_RETURN_OFF,
 };
 
 const struct target_profile *target_profile_get(void) {

