@@ -141,9 +141,11 @@ s = open(path).read()
 if "path_umount_fn" in s:
     print("[lkm] path_umount runtime lookup already present")
     raise SystemExit(0)
-# Newer staging sources ifdef the whole path_umount branch for modules and
-# always use ksyscall(umount), which needs no GOT workaround.
-if "#ifdef MODULE" in s and "ksyscall(umount" in s:
+# Only skip the workaround when the module path really no longer references
+# the weak path_umount (newer upstream ifdefs the whole branch).  The
+# 4269960c staging still has the weak extern, so it must be patched.
+if "#ifdef MODULE" in s and "ksyscall(umount" in s and \
+        "extern int path_umount(struct path *path, int flags) __weak;" not in s:
     print("[lkm] kernel_umount.c already uses the module syscall path; no patch needed")
     raise SystemExit(0)
 old = '''static __nocfi inline void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
