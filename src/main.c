@@ -838,6 +838,8 @@ static int load_module_file(const char *path) {
     return ksu_load_module(path, params);
 }
 
+static void setenforce_permissive(void);
+
 static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     if (prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) < 0 ||
         getppid() != parent_pid)
