@@ -45,6 +45,8 @@ scan finds nothing.
 | `SEC_PERM_TRIGGER` | `1` | `0` performs the dry run: leak KASLR, print the derived addresses, leave the context untouched |
 | `INJECT_KO` | off | path to a KernelSU LKM to late-load from the root child |
 | `INJECT_KO_PARAMS` | `allow_shell=1` | module parameters passed to `init_module` |
+| `LATE_LOAD` | off | path to the KernelSU userspace (`/data/adb/ksud`); run `late-load` from the root child so the manager gets a driver fd |
+| `KSU_PACKAGE` | `me.weishu.kernelsu` | manager package passed to `late-load` |
 | `SEC_SID=n` | off | forge `task_security_struct` with SID `n` (`1` = `u:r:kernel:s0`); see [SEC_SID.md](SEC_SID.md) |
 | `KGSL_CHILDREN` | auto (8192 on >= 7 GB) | spray children (512..16384) |
 | `KGSL_PRESSURE_MB` | auto (~60% MemAvailable) | memory pressure to drain the KGSL pool (0..5120) |

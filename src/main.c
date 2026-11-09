@@ -1281,6 +1281,35 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
         __sync_synchronize();
     }
 
+    /*
+     * A late-loaded module has no init-started ksud, so the manager app's
+     * ksud children have no driver fd and their SYS_reboot magic is killed
+     * by the app seccomp policy.  ksud's own late-load entry point sets the
+     * userspace up and restarts the manager with a fresh fd; run it from
+     * this full-capability root child.
+     */
+    const char *late = getenv("LATE_LOAD");
+    if (late && *late) {
+        const char *pkg = getenv("KSU_PACKAGE");
+        if (!pkg || !*pkg)
+            pkg = "me.weishu.kernelsu";
+        printf("[*] %s late-load --allow-shell --package-name %s\n", late, pkg);
+        pid_t lp = fork();
+        if (lp == 0) {
+            char *argv[] = { (char *)late, (char *)"late-load",
+                             (char *)"--allow-shell",
+                             (char *)"--package-name", (char *)pkg, NULL };
+            execv(late, argv);
+            _exit(127);
+        }
+        if (lp > 0) {
+            int lst = 0;
+            while (waitpid(lp, &lst, 0) < 0 && errno == EINTR) {}
+            if (WIFEXITED(lst))
+                printf("[*] late-load exited %d\n", WEXITSTATUS(lst));
+        }
+    }
+
     /* Load KSU before the slow policy reload so the manager can detect it
      * immediately; the script itself is backgrounded. */
     run_policy_fix();
