@@ -11,7 +11,7 @@ endif
 
 TARGET := $(OUTDIR)/kgsl_root_su
 SOURCES := src/main.c src/target_profile.c \
-           src/keymaster_device_state.c src/selinux_handoff.c \
+           src/selinux_handoff.c \
            src/ko_loader.c
 HEADERS := $(wildcard src/*.h $(TARGET_DIR)/*.h)
 TARGET_CFLAGS := -Isrc -DTARGET_CONFIG_H=\"targets/$(PROJECT)/target.h\"

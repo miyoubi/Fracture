@@ -49,7 +49,6 @@ scan now batches up to 2048 pages per GPU submission (1 MiB dump buffer,
 | `KGSL_RACE_CPU` | auto (a second CPU) | CPU for the racer threads; set it to the park CPU to use the old single-CPU race |
 | `KGSL_RACE_DELAY_US` | `30` | delay after the racer enters the ioctl before the overlap `mmap` (0..100000) |
 | `KGSL_ROUNDS` | `8` | exploit rounds (1..16) |
-| `KM_UNLOCK_MODE=read\|write` | off | Keymaster device-state probe through QSEECom |
 
 ```sh
 # permissive + KernelSU late-load

