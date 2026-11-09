@@ -22,6 +22,7 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include "keymaster_device_state.h"
+#include "ko_loader.h"
 #include "selinux_handoff.h"
 #include "su_runtime.h"
 #include "target_profile.h"
@@ -932,6 +933,13 @@ static uint64_t sec_perm_arm(
     return kaslr;
 }
 
+static int load_module_file(const char *path) {
+    const char *params = getenv("INJECT_KO_PARAMS");
+    if (!params)
+        params = "allow_shell=1";
+    return ksu_load_module(path, params);
+}
+
 static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     if (prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) < 0 ||
         getppid() != parent_pid)
@@ -1331,6 +1339,16 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
         _exit(ctrls[idx].qsee_status == 0 ? 0 : 1);
     }
     if (ctrls[idx].daemon_abort) _exit(127);
+
+    if (getenv("INJECT_KO")) {
+        const char *ko = getenv("INJECT_KO");
+        printf("[*] init_module(%s)\n", ko);
+        if (load_module_file(ko) == 0)
+            printf("[+] init_module succeeded\n");
+        else
+            perror("init_module");
+        __sync_synchronize();
+    }
 
     if (su_runtime_start_daemon(&ctrls[idx].daemon_stage) < 0) {
         ctrls[idx].error = errno ? errno : EIO;
@@ -2536,7 +2554,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[-] KM_UNLOCK_MODE must be read or write\n");
         return 2;
     }
-    if (!run_kmunlock && !sec_sid_mode && su_runtime_wait_ready(300) == 0) {
+    if (!run_kmunlock && !sec_sid_mode && !getenv("INJECT_KO") &&
+        su_runtime_wait_ready(300) == 0) {
         if (!sec_perm_mode) {
             printf("[+] root su service already running\n");
             return 0;
