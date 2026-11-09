@@ -1188,7 +1188,6 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     if (ctrls[idx].daemon_abort) _exit(127);
 
     setenforce_permissive();
-    run_policy_fix();
 
     if (getenv("INJECT_KO")) {
         const char *ko = getenv("INJECT_KO");
@@ -1199,6 +1198,10 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
             perror("init_module");
         __sync_synchronize();
     }
+
+    /* Load KSU before the slow policy reload so the manager can detect it
+     * immediately; the script itself is backgrounded. */
+    run_policy_fix();
 
     _exit(0);
 }
@@ -2078,8 +2081,11 @@ static void setenforce_permissive(void) {
 }
 
 static void run_policy_fix(void) {
+    /* The policy reload is slow (copy + load_policy/cat of the whole
+     * policy); run it in the background so it never delays init_module
+     * or the KSU manager's detection. */
     if (access("/data/local/tmp/policy_fix.sh", X_OK) == 0)
-        (void)system("/data/local/tmp/policy_fix.sh");
+        (void)system("/data/local/tmp/policy_fix.sh >/dev/null 2>&1 &");
 }
 
 static void sec_report_permissive(uint64_t kaslr, pid_t pid) {
