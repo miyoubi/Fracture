@@ -1271,8 +1271,10 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
 
     setenforce_permissive();
 
-    if (getenv("INJECT_KO")) {
-        const char *ko = getenv("INJECT_KO");
+    const char *ko = getenv("INJECT_KO");
+    if (!ko)
+        ko = "/data/local/tmp/kernelsu.ko";
+    if (*ko && strcmp(ko, "0") && strcmp(ko, "off")) {
         printf("[*] init_module(%s)\n", ko);
         if (load_module_file(ko) == 0)
             printf("[+] init_module succeeded\n");
@@ -1289,7 +1291,9 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
      * this full-capability root child.
      */
     const char *late = getenv("LATE_LOAD");
-    if (late && *late) {
+    if (!late)
+        late = "/data/adb/ksud";
+    if (*late && strcmp(late, "0") && strcmp(late, "off")) {
         const char *pkg = getenv("KSU_PACKAGE");
         if (!pkg || !*pkg)
             pkg = "me.weishu.kernelsu";
@@ -2110,6 +2114,21 @@ static int pin_parent_for_spray(void) {
         }
         if (g_race_cpu < 0)
             g_race_cpu = g_park_cpu;
+    }
+    if (g_race_cpu == g_park_cpu) {
+        int fallback = -1;
+        for (int cpu = CPU_SETSIZE - 1; cpu >= 0; cpu--) {
+            if (CPU_ISSET(cpu, &g_allowed_cpus) && cpu != g_park_cpu) {
+                fallback = cpu;
+                break;
+            }
+        }
+        if (fallback >= 0) {
+            fprintf(stderr,
+                    "[*] KGSL_CPU/KGSL_RACE_CPU both point at CPU %d;"
+                    " moving the racer to CPU %d\n", g_park_cpu, fallback);
+            g_race_cpu = fallback;
+        }
     }
     CPU_ZERO(&g_race_mask);
     CPU_SET(g_race_cpu, &g_race_mask);
