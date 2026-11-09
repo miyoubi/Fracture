@@ -30,9 +30,11 @@ mode; it does not leave a root shell behind (see
 [PERMISSIVE.md](PERMISSIVE.md)).  Spray size and KGSL pressure are chosen
 from `/proc/meminfo` (8192 children and ~60% of MemAvailable on an 8 GB
 device).  The race runs the `kgsl_map_user_mem` thread on a second CPU,
-waits for it to enter the driver before the overlap `mmap`, and the memory
-scan now batches up to 2048 pages per GPU submission (1 MiB dump buffer,
-16 MiB IB).
+waits for it to enter the driver, then sweeps the overlap `mmap` delay over
+0..the measured ioctl duration (a fixed `KGSL_RACE_DELAY_US` pins it), and
+keeps the pressure mapping resident across the fork spray by default.  The
+memory scan batches up to 2048 pages per GPU submission (1 MiB dump buffer,
+16 MiB IB) and falls back to a full scan if the fast scan finds nothing.
 
 ## Optional settings
 
@@ -45,9 +47,11 @@ scan now batches up to 2048 pages per GPU submission (1 MiB dump buffer,
 | `SEC_SID=n` | off | forge `task_security_struct` with SID `n` (`1` = `u:r:kernel:s0`); see [SEC_SID.md](SEC_SID.md) |
 | `KGSL_CHILDREN` | auto (8192 on >= 7 GB) | spray children (512..16384) |
 | `KGSL_PRESSURE_MB` | auto (~60% MemAvailable) | memory pressure to drain the KGSL pool (0..5120) |
+| `KGSL_PRESSURE_HOLD` | `1` | keep the pressure resident across the fork spray; `0` releases it before spraying (old behaviour) |
 | `KGSL_RACERS` | `1` | concurrent `kgsl_map_user_mem` racers (1..4) |
 | `KGSL_RACE_CPU` | auto (a second CPU) | CPU for the racer threads; set it to the park CPU to use the old single-CPU race |
-| `KGSL_RACE_DELAY_US` | `30` | delay after the racer enters the ioctl before the overlap `mmap` (0..100000) |
+| `KGSL_RACE_DELAY_US` | auto | sweep the delay after the racer enters the ioctl over 0..the measured ioctl duration; set a value to pin it (0..100000) |
+| `KGSL_SCAN_FULL` | off | force the full task scan (`1`); otherwise the fast scan falls back to it when it finds nothing |
 | `KGSL_ROUNDS` | `8` | exploit rounds (1..16) |
 
 ```sh
@@ -90,9 +94,9 @@ the stock Sony 4.19 tree:
 
   `-mbranch-protection=none` avoids the PAuth relocations clang 17 emits for
   function-pointer tables.  The 4.19 arm64 module loader also lacks the GOT
-  relocations a weak `path_umount` produces, so the copied
-  `kernel/feature/kernel_umount.c` resolves `path_umount` at runtime through
-  `kallsyms_lookup_name` (falling back to `ksyscall(umount)`).
+  relocations a weak `path_umount` produces; the staging `kernel_umount.c`
+  wraps the weak `path_umount` in `#ifndef MODULE`, so the module takes the
+  `ksyscall(umount)` path and emits no GOT relocations.
 - `src/ko_loader.c` binds the module's undefined symbols from
   `/proc/kallsyms` (temporarily setting `kptr_restrict=1`), patches them to
   `SHN_ABS`, and calls `init_module` from the full-capability root child.
