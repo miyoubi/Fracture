@@ -13,10 +13,11 @@ Grooming knobs (all heuristics, tune per device):
 | --- | --- |
 | `KGSL_CHILDREN` | auto from `/proc/meminfo` (8192 on >= 7 GB) |
 | `KGSL_PRESSURE_MB` | auto (~60% MemAvailable) |
-| `KGSL_PRESSURE_HOLD` | `1` (keep the pressure across the fork spray) |
+| `KGSL_PRESSURE_HOLD` | `0` (opt in with `1` to keep the pressure across the fork spray) |
 | `KGSL_RACERS` | 1 |
 | `KGSL_RACE_CPU` | auto (second CPU) |
 | `KGSL_RACE_DELAY_US` | auto (sweep 0..measured ioctl duration) |
+| `KGSL_RACE_RETRY_MS` | 200 |
 | `KGSL_ROUNDS` | 8 |
 
 The race window is scheduler/driver/build dependent; the children and

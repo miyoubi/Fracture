@@ -31,10 +31,11 @@ mode; it does not leave a root shell behind (see
 from `/proc/meminfo` (8192 children and ~60% of MemAvailable on an 8 GB
 device).  The race runs the `kgsl_map_user_mem` thread on a second CPU,
 waits for it to enter the driver, then sweeps the overlap `mmap` delay over
-0..the measured ioctl duration (a fixed `KGSL_RACE_DELAY_US` pins it), and
-keeps the pressure mapping resident across the fork spray by default.  The
-memory scan batches up to 2048 pages per GPU submission (1 MiB dump buffer,
-16 MiB IB) and falls back to a full scan if the fast scan finds nothing.
+0..the measured ioctl duration (a fixed `KGSL_RACE_DELAY_US` pins it).
+`KGSL_PRESSURE_HOLD=1` optionally keeps the pressure mapping resident across
+the fork spray.  The memory scan batches up to 2048 pages per GPU submission
+(1 MiB dump buffer, 16 MiB IB) and falls back to a full scan if the fast
+scan finds nothing.
 
 ## Optional settings
 
@@ -47,10 +48,11 @@ memory scan batches up to 2048 pages per GPU submission (1 MiB dump buffer,
 | `SEC_SID=n` | off | forge `task_security_struct` with SID `n` (`1` = `u:r:kernel:s0`); see [SEC_SID.md](SEC_SID.md) |
 | `KGSL_CHILDREN` | auto (8192 on >= 7 GB) | spray children (512..16384) |
 | `KGSL_PRESSURE_MB` | auto (~60% MemAvailable) | memory pressure to drain the KGSL pool (0..5120) |
-| `KGSL_PRESSURE_HOLD` | `1` | keep the pressure resident across the fork spray; `0` releases it before spraying (old behaviour) |
+| `KGSL_PRESSURE_HOLD` | `0` | keep the pressure resident across the fork spray; `0` releases it before spraying |
 | `KGSL_RACERS` | `1` | concurrent `kgsl_map_user_mem` racers (1..4) |
 | `KGSL_RACE_CPU` | auto (a second CPU) | CPU for the racer threads; set it to the park CPU to use the old single-CPU race |
 | `KGSL_RACE_DELAY_US` | auto | sweep the delay after the racer enters the ioctl over 0..the measured ioctl duration; set a value to pin it (0..100000) |
+| `KGSL_RACE_RETRY_MS` | `200` | settle time between race attempts (0..5000); give the KGSL pool time to release the last 256 MiB object |
 | `KGSL_SCAN_FULL` | off | force the full task scan (`1`); otherwise the fast scan falls back to it when it finds nothing |
 | `KGSL_ROUNDS` | `8` | exploit rounds (1..16) |
 
