@@ -125,6 +125,17 @@ list_targets() {
         fi
     fi
     printf 'Example: ./build.sh -p sog02-58.2.C.3.127 [--push]\n'
+    printf '\nComponents:\n'
+    if [ -d "$NDK" ]; then
+        printf '  NDK:    present (%s)\n' "$NDK"
+    else
+        printf '  NDK:    missing (%s) - run ./build.sh --setup\n' "$NDK"
+    fi
+    if [ -d "$KERNEL_DIR" ]; then
+        printf '  kernel: present (%s)\n' "$KERNEL_DIR"
+    else
+        printf '  kernel: missing (%s) - run ./build.sh --setup\n' "$KERNEL_DIR"
+    fi
 }
 
 setup_components() {
@@ -215,7 +226,9 @@ if [ -z "$PROJECT" ]; then
 fi
 [ -d "$ROOT/src/targets/$PROJECT" ] \
     || die "unknown project $PROJECT (make list-projects)"
-[ -d "$KERNEL_DIR" ] || die "kernel tree not found: $KERNEL_DIR"
+[ -d "$KERNEL_DIR" ] \
+    || die "missing kernel tree: $KERNEL_DIR; run ./build.sh --setup"
+[ -d "$NDK" ] || die "missing NDK: $NDK; run ./build.sh --setup"
 
 log "project: $PROJECT"
 [ -n "$SERIAL" ] && log "device:  $SERIAL"
