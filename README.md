@@ -102,7 +102,7 @@ is denied; the exploit prints the reason.
 | `SEC_PERMISSIVE` | `1` | clear `selinux_state.enforcing` through the forged `thread.cpu_context`; `0` skips the hijack |
 | `SEC_PERM_TRIGGER` | `1` | `0` performs the dry run: leak KASLR, print the derived addresses, leave the context untouched |
 | `INJECT_KO` | `/data/local/tmp/kernelsu.ko` | LKM loaded from the root child; `0` disables |
-| `INJECT_KO_PARAMS` | `allow_shell=1` | module parameters passed to `init_module` |
+| `INJECT_KO_PARAMS` | `allow_shell=0` | module parameters passed to `init_module` |
 | `LATE_LOAD` | `/data/adb/ksud` | userspace binary for `late-load`; `0` disables |
 | `KSU_PACKAGE` | `me.weishu.kernelsu` | manager package passed to `late-load` |
 | `POLICY_FIX` | `0` | force `policy_fix.sh` even when the late-load is enabled (not recommended) |

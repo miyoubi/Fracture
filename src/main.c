@@ -917,7 +917,7 @@ static uint64_t sec_perm_arm(
 static int load_module_file(const char *path) {
     const char *params = getenv("INJECT_KO_PARAMS");
     if (!params)
-        params = "allow_shell=1";
+        params = "allow_shell=0";
     return ksu_load_module(path, params);
 }
 
