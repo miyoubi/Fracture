@@ -1,8 +1,9 @@
 # CVE-2023-33107 Xperia root
 
 KGSL UAF temporary-root exploit for the Sony Xperia 5 II (SOG02).  It
-patches the process credentials, switches SELinux to permissive through the
-forged `thread.cpu_context` switch-in, and can late-load a KernelSU LKM.
+patches the process credentials, flips SELinux permissive through the
+forged `thread.cpu_context` switch-in, and can late-load a KernelSU LKM
+plus its userspace.
 
 | Project | Device | Firmware | Kernel |
 | --- | --- | --- | --- |
@@ -12,34 +13,87 @@ forged `thread.cpu_context` switch-in, and can late-load a KernelSU LKM.
 
 ```sh
 make PROJECT=sog02-58.2.C.3.127 NDK_ROOT="$NDK"
+tools/build_kernelsu_lkm.sh
+
 adb push build/sog02-58.2.C.3.127/kgsl_root_su /data/local/tmp/kgsl_root_su
-adb push kernelsu.ko /data/local/tmp/kernelsu.ko      # see KernelSU late-load
+adb push build/sog02-58.2.C.3.127/kernelsu.ko /data/local/tmp/kernelsu.ko
+
 adb shell 'chmod 755 /data/local/tmp/kgsl_root_su; \
   /data/local/tmp/kgsl_root_su'
-adb shell 'getenforce'                                 # Permissive
+adb shell 'getenforce'                                 # permissive at startup; KSU may enforce
 adb shell 'cat /proc/modules | grep kernelsu'          # kernelsu ... Live
 ```
 
 A plain run loads `/data/local/tmp/kernelsu.ko` and runs
-`/data/adb/ksud late-load` by default (`INJECT_KO=0` / `LATE_LOAD=0`
-disable either).  The exploit also force-restarts the manager after a
-short delay instead of waiting for the late-load's 35 s stage scripts.
+`/data/adb/ksud late-load` from the root child.  `INJECT_KO=0` and/or
+`LATE_LOAD=0` disable either half.  `POLICY_FIX=1` forces the exploit's
+own SELinux policy reload while the late-load is enabled (normally skipped;
+see the crash note below).
 
-Root comes from the KernelSU userspace (manager/`ksud` su at
-`/data/adb/ksu/bin/ksu`); the exploit no longer ships its own su client or
-daemon.
+Root comes from the KernelSU userspace (manager / `ksud` su); the exploit
+does not ship its own su client or daemon.
 
-Without `INJECT_KO` a plain run only drops `selinux_state` into permissive
-mode; it does not leave a root shell behind (see
-[PERMISSIVE.md](PERMISSIVE.md)).  Spray size and KGSL pressure are chosen
-from `/proc/meminfo` (8192 children and ~60% of MemAvailable on an 8 GB
-device).  The race runs the `kgsl_map_user_mem` thread on a second CPU,
-waits for it to enter the driver, then sweeps the overlap `mmap` delay over
-0..the measured ioctl duration (a fixed `KGSL_RACE_DELAY_US` pins it).
-`KGSL_PRESSURE_HOLD=1` optionally keeps the pressure mapping resident across
-the fork spray.  The memory scan batches up to 2048 pages per GPU submission
-(1 MiB dump buffer, 16 MiB IB) and falls back to a full scan if the fast
-scan finds nothing.
+## How it works
+
+- **KGSL race.** `kgsl_map_user_mem` runs on a second CPU and races the
+  overlap `mmap`.  The exploit measures the ioctl duration, sweeps the
+  `mmap` delay over `0..that duration`, and time-bounds the retry loop.
+  The freed object's pages are reclaimed by spraying children
+  (`/proc/meminfo`-derived sizes).
+- **Credentials.** A child `task_struct`/`cred` is located through the
+  reclaimed GPU mapping and patched to uid/gid 0 with full capability
+  sets; the root child verifies via `/proc/<pid>/status`.
+- **Permissive.** The raw `thread.cpu_context` switch-in leaks KASLR
+  (`__switch_to` continuation), stores `0x01000000` into `selinux_state`
+  (enforcing=0), and replays the `__switch_to` epilogue.  The root child
+  then writes `/sys/fs/selinux/enforce` so `init` and the property service
+  refresh their cached AVC state.
+- **KernelSU.** `src/ko_loader.c` resolves the module's undefined symbols
+  from `/proc/kallsyms`, patches the symtab entries to `SHN_ABS`, and calls
+  `init_module` from the full-capability root child.  The root child then
+  runs `ksud late-load`, which installs the userspace and initializes the
+  manager side.
+
+The manager's driver-fd handshake and detection belong to the KernelSU
+userspace; the exploit does not restart or relaunch it.
+
+## SELinux / permissive failures
+
+Permissive is only needed for the exploit startup.  The forged-context
+store writes `selinux_state.enforcing = 0`, and the root child writes
+`/sys/fs/selinux/enforce` so `init` picks it up; the module load
+(`init_module`) would be denied by the shell domain while enforcing, so
+this happens before `INJECT_KO`.
+
+KernelSU's LKM init then re-enables enforcing by design
+(`ksu.c`: `if (!!getenforce()) return; pr_info("Permissive SELinux,
+enforcing"); setenforce(true);`).  The exploit leaves that decision to
+KernelSU, so `getenforce` may report `Enforcing` after a late-load run —
+that is expected, not a failure.  A second selinuxfs write would be denied
+by the `security:security setenforce` check for the shell domain, so it is
+not attempted.
+
+The startup permissive fails only when the forged-context hijack did not
+arm (`permissive hijack not armed`, implausible KASLR/context, or a GPU
+write failure).  The raw store never happens then, and the selinuxfs write
+is denied; the exploit prints the reason.
+
+## Known failure modes
+
+- **KGSL `ENOMEM` on every try** — the driver pool is exhausted from
+  repeated 256 MiB objects.  The exploit stops after a full round of
+  `ENOMEM`; reboot the device.  `KGSL_RACE_RETRY_MS` (default 200) is the
+  settle time between attempts.
+- **Watchdog panic / freeze.**  `console-ramoops-0` shows every CPU
+  spinning on the SELinux policy read lock (`security_context_to_sid_core`,
+  `security_compute_sid`, `avc_compute_av`) right after `KernelSU: shell is
+  allowed at init! / transive domain failed.`  Two `security_load_policy()`
+  calls (KernelSU's own sepolicy load and the exploit's `policy_fix.sh`)
+  hold the policy write lock long enough for the watchdog to bark.  The
+  exploit now skips `policy_fix.sh` whenever the KernelSU late-load is
+  enabled; do not combine `POLICY_FIX=1` with `LATE_LOAD`.  Reboot after a
+  watchdog panic.
+- Changing `sys.usb.config` re-enumerates USB and can drop adb.
 
 ## Optional settings
 
@@ -51,20 +105,24 @@ scan finds nothing.
 | `INJECT_KO_PARAMS` | `allow_shell=1` | module parameters passed to `init_module` |
 | `LATE_LOAD` | `/data/adb/ksud` | userspace binary for `late-load`; `0` disables |
 | `KSU_PACKAGE` | `me.weishu.kernelsu` | manager package passed to `late-load` |
+| `POLICY_FIX` | `0` | force `policy_fix.sh` even when the late-load is enabled (not recommended) |
 | `SEC_SID=n` | off | forge `task_security_struct` with SID `n` (`1` = `u:r:kernel:s0`); see [SEC_SID.md](SEC_SID.md) |
 | `KGSL_CHILDREN` | auto (8192 on >= 7 GB) | spray children (512..16384) |
 | `KGSL_PRESSURE_MB` | auto (~60% MemAvailable) | memory pressure to drain the KGSL pool (0..5120) |
-| `KGSL_PRESSURE_HOLD` | `0` | keep the pressure resident across the fork spray; `0` releases it before spraying |
+| `KGSL_PRESSURE_HOLD` | `0` | keep the pressure resident across the fork spray |
 | `KGSL_RACERS` | `1` | concurrent `kgsl_map_user_mem` racers (1..4) |
-| `KGSL_RACE_CPU` | auto (a second CPU) | CPU for the racer threads; set it to the park CPU to use the old single-CPU race |
-| `KGSL_RACE_DELAY_US` | auto | sweep the delay after the racer enters the ioctl over 0..the measured ioctl duration; set a value to pin it (0..100000) |
-| `KGSL_RACE_RETRY_MS` | `200` | settle time between race attempts (0..5000); give the KGSL pool time to release the last 256 MiB object |
-| `KGSL_SCAN_FULL` | off | force the full task scan (`1`); otherwise the fast scan falls back to it when it finds nothing |
+| `KGSL_RACE_CPU` | auto (a second CPU) | CPU for the racer threads; a value equal to the park CPU is auto-corrected |
+| `KGSL_RACE_DELAY_US` | auto | sweep the overlap `mmap` delay over `0..the measured ioctl duration`; set a value to pin it (0..100000) |
+| `KGSL_RACE_RETRY_MS` | `200` | settle time between race attempts (0..5000) |
+| `KGSL_SCAN_FULL` | off | force the full task scan (`1`); the fast scan otherwise falls back automatically |
 | `KGSL_ROUNDS` | `8` | exploit rounds (1..16) |
 
 ```sh
 # default: permissive + LKM + ksud late-load
 adb shell '/data/local/tmp/kgsl_root_su'
+
+# exploit only, no module/userspace
+adb shell 'INJECT_KO=0 LATE_LOAD=0 /data/local/tmp/kgsl_root_su'
 
 # no kernel write
 adb shell 'SEC_PERMISSIVE=0 /data/local/tmp/kgsl_root_su'
@@ -80,56 +138,43 @@ fork](https://github.com/backslashxx/KernelSU) (`KernelSU/kernel`) against
 the stock Sony 4.19 tree:
 
 - `CONFIG_KSU=m`, `CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y`, and
-  `CONFIG_KALLSYMS_ALL=y` (the device config already has it).
+  `CONFIG_KALLSYMS_ALL=y` (already in the device config).
 - `CONFIG_MODVERSIONS=y` with a full `Module.symvers` generated from the
-  device `vmlinux`, so `module_layout` and every exported CRC match.  The
-  changelog's `CONFIG_MODVERSIONS=n` is optional; with matching CRCs it is
-  not needed.
-- Build with (run inside the stock kernel tree, with the fork's `kernel/`
-  copied to `KernelSU/kernel` and its Kconfig sourced):
-
-  ```sh
-  make ARCH=arm64 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android30- \
-    CC="$NDK/aarch64-linux-android30-clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
-    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip HOSTCC=gcc \
-    KBUILD_MODPOST_WARN=1 \
-    KCFLAGS="-march=armv8-a+lse -DCONFIG_AS_LSE=1 -mbranch-protection=none" \
-    M="$PWD/KernelSU/kernel" modules
-  ```
-
-  `-mbranch-protection=none` avoids the PAuth relocations clang 17 emits for
-  function-pointer tables.  The 4.19 arm64 module loader also lacks the GOT
-  relocations a weak `path_umount` produces; the staging `kernel_umount.c`
-  wraps the weak `path_umount` in `#ifndef MODULE`, so the module takes the
-  `ksyscall(umount)` path and emits no GOT relocations.
-- `src/ko_loader.c` binds the module's undefined symbols from
-  `/proc/kallsyms` (temporarily setting `kptr_restrict=1`), patches them to
-  `SHN_ABS`, and calls `init_module` from the full-capability root child.
-  `INJECT_KO_PARAMS` is passed as the module argument (`allow_shell=1` by
-  default).
-- The `scripts/Makefile.modpost` `-w` tweak and the `KALLSYMS_ALL` Kconfig
-  change are from
-  [`backslashxx/kernel_xiaomi_sm6225@dd352cb`](https://github.com/backslashxx/kernel_xiaomi_sm6225/commit/dd352cb).
-- The KernelSU userspace (manager/`ksud`) must be installed separately to
-  get the `su` binary; this exploit only late-loads the kernel module.
-
-### Building the LKM
+  device `vmlinux`, so `module_layout` and every exported CRC match.
+- Build with `-march=armv8-a+lse -DCONFIG_AS_LSE=1
+  -mbranch-protection=none`; the LSE flag is needed for the inline atomics
+  and `-mbranch-protection=none` avoids PAuth relocations the 4.19 module
+  loader cannot handle.
+- The 4.19 loader also has no GOT relocations.  The staging
+  `kernel_umount.c` wraps the weak `path_umount` in `#ifndef MODULE` and
+  uses `ksyscall(umount)`, so the module never emits a GOT reference; the
+  build script does not patch it.
+- No preinit workaround is needed: the staging source takes the
+  `KSU_NO_PREINIT` path on this kernel and upstream fixed the late-load
+  kthread call.
+- `src/ko_loader.c` binds undefined symbols from `/proc/kallsyms`
+  (temporarily setting `kptr_restrict=1`), patches them to `SHN_ABS`, and
+  calls `init_module` from the root child.
+- The KernelSU userspace (`ksud` / manager) must be installed to get `su`;
+  this repository only builds and late-loads the kernel module.
+- If `/data/adb/ksud` is not installed on a fresh boot, the root child
+  falls back to `/data/adb/ksu/bin/ksud` and then the manager APK's
+  `lib/arm64/libksud.so`, and reports the `execv` error if none of them
+  run.
 
 `tools/build_kernelsu_lkm.sh` automates the whole flow:
 
 ```sh
 tools/build_kernelsu_lkm.sh                             # origin/staging (default)
 KSU_REF=master tools/build_kernelsu_lkm.sh              # a branch
-KSU_COMMIT=e2f2e397 tools/build_kernelsu_lkm.sh         # an exact commit
-VMLINUX=/path/vmlinux.elf tools/build_kernelsu_lkm.sh   # regenerate the full symvers
+KSU_COMMIT=<sha> tools/build_kernelsu_lkm.sh            # an exact commit
+VMLINUX=/path/vmlinux.elf tools/build_kernelsu_lkm.sh   # regenerate full symvers
 ```
 
-It clones/fetches `backslashxx/KernelSU` into `KernelSU/`, copies `kernel/`
-into `stockkernel_sony_sm8250-main/KernelSU/kernel`, wires the Kconfig and
-`CONFIG_KSU=m`, generates `compile.h`/`flask.h`, ensures the full device
-`Module.symvers` (via `gen_symvers.py`, using `VMLINUX` when supplied),
-re-applies the `path_umount` runtime lookup, builds with the LSE/PA flags,
-verifies that no GOT/PAuth relocations remain, and leaves the result at
+It fetches the fork, copies `kernel/` into the stock tree, wires Kconfig
+and `CONFIG_KSU=m`, generates `compile.h` / `flask.h` / `av_permissions.h`,
+ensures the device `Module.symvers` (via `gen_symvers.py`), builds the
+module, verifies there are no GOT/PAuth relocations, and stages
 `build/<project>/kernelsu.ko`.
 
 ## Credits
@@ -140,7 +185,4 @@ verifies that no GOT/PAuth relocations remain, and leaves the result at
 - **Keto (`keto0422`)** — original CVE-2023-33107 KGSL UAF exploit and
   write-up that this port builds on.
 - **backslashxx** — [KernelSU fork](https://github.com/backslashxx/KernelSU)
-  used for the late-load LKM (`KernelSU/kernel`), including the LKM support
-  restoration (`c96e9272`, changelog `65a906e`) and the staging
-  `kallsyms_common.h` scan tweak (`2c515d1e`).
-
+  used for the late-load LKM, and the `dd352cb` modpost/KALLSYMS_ALL tweak.
