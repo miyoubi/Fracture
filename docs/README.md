@@ -1,19 +1,27 @@
-# CVE-2023-33107 Xperia — port notes
+# CVE-2023-33107 Xperia — notes
 
-Target: Sony Xperia 5 II (SOG02), firmware 58.2.C.3.127, kernel
-4.19.157-perf+ (SM8250 / Snapdragon 865). Locked bootloader.
+Targets: Sony Xperia 1 II / 5 II family (SO-51A, SO-52A, SOG01, SOG02),
+kernel 4.19.157-perf+ (SM8250 / Snapdragon 865), locked bootloader. The
+per-device builds are listed in the [root README](../README.md).
 
 These notes are the working findings from porting the exploit and the
-late-load KernelSU LKM; they are not a polished write-up.
+late-load KernelSU LKM; start with [exploit.md](exploit.md) for the
+end-to-end description and [troubleshooting.md](troubleshooting.md) for
+failure modes.
 
 ## Documents
 
+- [exploit.md](exploit.md) — end-to-end mechanics: KGSL UAF race,
+  reclaim, credential patch, forged `thread.cpu_context`, KernelSU
+  late-load, profiles, and the runtime output.
+- [troubleshooting.md](troubleshooting.md) — symptoms, diagnosis and
+  tuning (`[exit] 137`, `ENOMEM`, failed alias scan, permissive, LKM).
 - [primitive.md](primitive.md) — KGSL UAF, credential patch, SELinux
   permissive via `thread.cpu_context`, and the userspace AVC problem.
 - [kernelsu-late-load.md](kernelsu-late-load.md) — building and loading
   `kernelsu.ko` from the backslashxx fork on this 4.19 vendor kernel.
-- [porting.md](porting.md) — what to re-derive for another 4.19.157
-  Sony (e.g. Xperia 1 II SO-51A / SO-52A, 58.2.B.0.520).
+- [porting.md](porting.md) — profiles and what to re-derive for another
+  4.19.157 Sony (SO-51A / SO-52A / SOG01).
 
 ## Current shape of the tree
 
@@ -22,7 +30,9 @@ late-load KernelSU LKM; they are not a polished write-up.
   child. The custom su client/daemon was removed; root is expected to
   come from the KernelSU userspace.
 - `tools/build_kernelsu_lkm.sh` builds the LKM from
-  `backslashxx/KernelSU` (the existing checkout; `--pull` updates it).
+  `backslashxx/KernelSU` against `kernel_sony_sm8250` (the existing
+  checkout; `--pull` updates it). The SO-51A/SO-52A/SOG01 kernels share
+  identical `Module.symvers`, so one module covers them.
 - `tools/policy_fix.sh` + `tools/sepolicy.rule` + `tools/su_env` cover
   the SELinux/property-service side.
 

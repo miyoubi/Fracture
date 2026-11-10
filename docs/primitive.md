@@ -7,6 +7,9 @@ driver. The exploit races `kgsl_map_user_mem` against the overlap
 `mmap` and reclaims the freed page, then uses the GPU submission path
 (`gpu_write_words` / `gpu_read_words`) as a kernel read/write primitive.
 
+See [exploit.md](exploit.md) for the full pipeline and
+[troubleshooting.md](troubleshooting.md) for failure modes.
+
 Grooming knobs (all heuristics, tune per device):
 
 | env | default |
@@ -16,12 +19,18 @@ Grooming knobs (all heuristics, tune per device):
 | `KGSL_PRESSURE_HOLD` | `0` (opt in with `1` to keep the pressure across the fork spray) |
 | `KGSL_RACERS` | 1 |
 | `KGSL_RACE_CPU` | auto (second CPU) |
+| `KGSL_CPU` | auto (park CPU) |
 | `KGSL_RACE_DELAY_US` | auto (sweep 0..measured ioctl duration) |
 | `KGSL_RACE_RETRY_MS` | 200 |
 | `KGSL_ROUNDS` | 8 |
 
 The race window is scheduler/driver/build dependent; the children and
 pressure are memory-derived, not firmware constants.
+
+Scan/diagnosis knobs: `KGSL_SCAN_FULL` (setting it skips the full-scan
+fallback; unset lets a miss retry the full scan) and
+`KGSL_SCAN_DIAGNOSTICS=1` (log why `/proc/<pid>/status` rejects a
+candidate).
 
 ## Credential patch
 

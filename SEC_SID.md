@@ -1,6 +1,8 @@
 # `SEC_SID=1` — SELinux bypass through a forged `task_security_struct`
 
-Temporary-root follow-up for `sog02-58.2.C.3.127`. The KGSL UAF gives uid 0,
+Temporary-root follow-up (profiles: `sog02-58.2.C.3.127`,
+`so-52a-58.2.B.0.520`, `so-51a-58.2.B.0.520`, `sog01-58.2.C.5.10`; the
+task_struct/cred offsets are shared). The KGSL UAF gives uid 0,
 but the process stays in `u:r:shell:s0` with SELinux enforcing, which blocks
 `/dev/qseecom`, every `block_device`, `/dev/socket/tad`, the MiscTA HAL and
 `/sys/fs/selinux/*`.
@@ -38,17 +40,14 @@ u:r:kernel:s0
 
 ```sh
 # root + forged SID, child stays alive in u:r:kernel:s0
-adb shell 'SEC_SID=1 KGSL_CHILDREN=4000 KGSL_PRESSURE_MB=2560 /data/local/tmp/kgsl_sid'
-
-# root + forged SID + Keymaster device-state read (0x202)
-adb shell 'SEC_SID=1 KM_UNLOCK_MODE=read KGSL_CHILDREN=4000 KGSL_PRESSURE_MB=2560 /data/local/tmp/kgsl_sid'
+adb shell 'SEC_SID=1 KGSL_CHILDREN=4000 KGSL_PRESSURE_MB=2560 /data/local/tmp/kgsl_root_su'
 ```
 
-With `KM_UNLOCK_MODE` set, the child skips the (broken, PAN-blocked)
-`selinux_handoff` and calls the QSEECom client directly from the SID-1
-process.
+The Keymaster/KM unlock experiment was dropped; the current path only
+forges the SID. See [docs/exploit.md](docs/exploit.md) for the full
+pipeline.
 
-## Target offsets (SOG02 `58.2.C.3.127`, from `layout.log`)
+## Offsets (shared by the current profiles; from `layout.log`)
 
 | field | offset |
 |---|---|

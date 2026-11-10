@@ -13,6 +13,14 @@ plus its userspace.
 | `so-52a-58.2.B.0.520` | Sony Xperia 5 II (SO-52A) | `58.2.B.0.520` | `4.19.157-perf+` |
 | `sog01-58.2.C.5.10` | Sony Xperia 1 II (SOG01, KDDI) | `58.2.C.5.10` | `4.19.157-perf+` |
 
+## Documentation
+
+- [docs/exploit.md](docs/exploit.md) — how the exploit works, end to end.
+- [docs/troubleshooting.md](docs/troubleshooting.md) — failure modes and tuning.
+- [docs/primitive.md](docs/primitive.md) — primitive and SELinux notes.
+- [docs/porting.md](docs/porting.md) — profiles and deriving new offsets.
+- [docs/kernelsu-late-load.md](docs/kernelsu-late-load.md) — the LKM and late-load.
+
 ## Build and run
 
 ```sh
@@ -116,9 +124,10 @@ is denied; the exploit prints the reason.
 | `KGSL_PRESSURE_HOLD` | `0` | keep the pressure resident across the fork spray |
 | `KGSL_RACERS` | `1` | concurrent `kgsl_map_user_mem` racers (1..4) |
 | `KGSL_RACE_CPU` | auto (a second CPU) | CPU for the racer threads; a value equal to the park CPU is auto-corrected |
+| `KGSL_CPU` | auto | CPU the parent parks on for the spray/scan |
 | `KGSL_RACE_DELAY_US` | auto | sweep the overlap `mmap` delay over `0..the measured ioctl duration`; set a value to pin it (0..100000) |
 | `KGSL_RACE_RETRY_MS` | `200` | settle time between race attempts (0..5000) |
-| `KGSL_SCAN_FULL` | off | force the full task scan (`1`); the fast scan otherwise falls back automatically |
+| `KGSL_SCAN_FULL` | off | setting it skips the full-scan fallback; unset lets a miss retry the full scan |
 | `KGSL_ROUNDS` | `8` | exploit rounds (1..16) |
 
 ```sh

@@ -9,6 +9,7 @@ runtime by the exploit's full-capability root child.
 
 The KernelSU userspace (`ksud` / manager / its `su`) is still required
 for a usable `su`; this repository only late-loads the kernel module.
+One LKM covers the current four devices; see [porting.md](porting.md).
 
 ## Build recipe (`tools/build_kernelsu_lkm.sh`)
 
@@ -17,6 +18,9 @@ The script automates:
 1. clone/use `backslashxx/KernelSU` in `KernelSU/`; with `--pull` fetch and
    check out `origin/staging` (staging is force-updated, the local branch
    can be stale). Without `--pull` the current checkout is built as-is.
+   Supply the device pair with `--config <config>` / `--symvers
+   <Module.symvers>`; without them the script uses the files at the
+   kernel tree root.
 2. copy `kernel/` into `kernel_sony_sm8250/KernelSU/kernel`
    and source its Kconfig from the tree Kconfig.
 3. `.config`: `CONFIG_KSU=m`, `CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y`,
@@ -30,7 +34,8 @@ The script automates:
    `CONFIG_MODVERSIONS=n` is optional and not used here.
 5. generate `include/generated/compile.h` (`scripts/mkcompile_h`) and
    `security/selinux/flask.h` / `av_permissions.h`
-   (`scripts/selinux/genheaders`).
+   (`scripts/selinux/genheaders`). The script also runs `modules_prepare`
+   once for a fresh tree (it creates the generated `asm/` headers).
 6. build with:
    ```
    KCFLAGS="-march=armv8-a+lse -DCONFIG_AS_LSE=1 -mbranch-protection=none"
@@ -63,7 +68,8 @@ which the compiler lowered through the GOT and the loader rejected with
 
 The staging source now wraps the weak `path_umount` in `#ifndef MODULE`
 and uses `ksyscall(umount)` for modules, so the module emits no GOT
-reference. The build script follows `origin/staging` and no longer needs
+reference. The build script builds the current checkout (`--pull`
+updates it) and no longer needs
 the runtime-lookup source patch. (On older sources the workaround was to
 resolve `path_umount` at runtime through `kallsyms_lookup_name`.)
 
@@ -74,8 +80,9 @@ The exploit's loader mirrors `ksuinit`:
 - temporarily sets `kptr_restrict=1` and reads `/proc/kallsyms`,
 - for every `SHN_UNDEF` symbol, resolves its address and patches the
   symtab entry to `SHN_ABS`/`st_value`,
-- calls `init_module` with the module parameters (`allow_shell=1` by
-  default, `INJECT_KO_PARAMS` overrides).
+- calls `init_module` with the module parameters (`INJECT_KO_PARAMS`
+  overrides; the tree defaults to `allow_shell=0`, and the late-load
+  separately passes `--allow-shell`).
 
 Unresolved names are left for the kernel's own exports. The root child
 runs the loader while it still has full capabilities.
@@ -93,7 +100,9 @@ runs from the root child, not PID 1).
 ## Userspace / SELinux
 
 - The KernelSU userspace (`ksud`, the manager APK) still has to be
-  installed; the device currently has no `/data/adb/ksu`.
+  installed. The exploit resolves `/data/adb/ksud`,
+  `/data/adb/ksu/bin/ksud`, or the manager APK's
+  `lib/arm64/libksud.so`.
 - For the property service, the exploit also writes the selinuxfs
   `enforce` node from the root child and ships `tools/policy_fix.sh` +
   `tools/sepolicy.rule` (see [primitive.md](primitive.md)).
@@ -111,6 +120,11 @@ The remaining latency, if any, is the manager's own polling interval.
 
 ## Tested artifacts
 
-- KernelSU `49f048c0` (`origin/staging`): `kernelsu.ko`, 349,256 bytes,
-  no GOT/PAuth relocations, no `path_umount` reference.
-- Earlier `e2f2e397` also builds, with the `#if 1` late-load init.
+- KernelSU `c965a489` (`staging`): `kernelsu.ko`, 340,216 bytes, no
+  GOT/PAuth relocations, no `path_umount` reference; vermagic
+  `4.19.157-perf+ SMP preempt mod_unload modversions aarch64`.
+- The SO-51A/SO-52A/SOG01 `Module.symvers` are identical (`module_layout`
+  `0xaaf6c76c`), and the SOG02 LKM's `__versions` matches them, so this
+  one module covers all four.
+- Earlier `49f048c0` / `e2f2e397` also built, with the `#if 1` late-load
+  init.

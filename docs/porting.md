@@ -23,14 +23,19 @@ covers all three.  Extract a device config with
 `kernel_sony_sm8250/scripts/extract-ikconfig <Image>` and build with
 `tools/build_kernelsu_lkm.sh --config <config> --symvers <Module.symvers>`.
 
+`make list-projects` lists the available profiles. See
+[exploit.md](exploit.md) for the full pipeline and
+[troubleshooting.md](troubleshooting.md) for failure modes.
+
 ## Reusable, but not plug-and-play
 
 The vulnerability and primitive live in the shared 4.19.157 vendor
 kernel + KGSL driver, so the logic (KGSL UAF → arbitrary R/W → cred
 patch → SELinux permissive via the forged `thread.cpu_context`) should
-port. The target data does not: every address, gadget and struct offset
-is derived from a specific kernel image and must be recalculated from
-the SO-51A image.
+port. The target data still comes from the specific kernel image. The
+four current profiles happen to share the task_struct/cred layout, but
+the addresses and gadgets are still image-specific; re-derive them for
+any other build.
 
 ## What to recalculate
 
@@ -69,9 +74,10 @@ KGSL:
 Then add `src/targets/<project>/target.h` and a `target_profile` entry
 and build with `PROJECT=<project>`.
 
-The SOG02 values (cpu_context `0xaf0`, fpsimd `0xb70`, continuation
-`0x89fc`, store gadget `0x427410`, switch return `0x117228`, etc.) are
-for this build; do not assume them.
+The SOG02 and SO-52A images use the `0x427410` store gadget; SO-51A and
+SOG01 use `0x424350` (the continuation `0x89fc` and switch return
+`0x117228` are the same). The struct offsets are shared across the
+current four images, but re-derive them for anything else.
 
 ## Deriving the offsets
 
