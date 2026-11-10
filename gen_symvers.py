@@ -7,8 +7,8 @@ __ksymtab_gpl and pairs each entry with __kcrctab{,_gpl}, resolving the
 relative __ksymtab name offsets (name is relative to entry+4, not entry).
 
 Environment:
-  VMLINUX  path to an ELF-converted vmlinux (default: the SOG02 scratch copy)
-  SYMVERS  output Module.symvers (default: stockkernel_sony_sm8250-main/Module.symvers)
+  VMLINUX  path to an ELF-converted vmlinux (required)
+  SYMVERS  output Module.symvers (default: kernel_sony_sm8250/Module.symvers)
 """
 import os
 import struct
@@ -22,7 +22,7 @@ if not ELF:
     sys.exit("set VMLINUX=/path/to/vmlinux.elf")
 
 OUT = os.environ.get(
-    "SYMVERS", os.path.join(ROOT, "stockkernel_sony_sm8250-main", "Module.symvers")
+    "SYMVERS", os.path.join(ROOT, "kernel_sony_sm8250", "Module.symvers")
 )
 
 # SOG02 4.19.157 .kernel / .kernel2 (VA base, file offset, size).

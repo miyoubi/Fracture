@@ -1,6 +1,7 @@
 # CVE-2023-33107 Xperia root
 
-KGSL UAF temporary-root exploit for the Sony Xperia 5 II (SOG02).  It
+KGSL UAF temporary-root exploit for the Sony Xperia 1 II / 5 II family
+(SO-51A, SO-52A, SOG01, SOG02).  It
 patches the process credentials, flips SELinux permissive through the
 forged `thread.cpu_context` switch-in, and can late-load a KernelSU LKM
 plus its userspace.
@@ -8,6 +9,9 @@ plus its userspace.
 | Project | Device | Firmware | Kernel |
 | --- | --- | --- | --- |
 | `sog02-58.2.C.3.127` | Sony Xperia 5 II (SOG02, KDDI) | `58.2.C.3.127` | `4.19.157-perf+` |
+| `so-51a-58.2.B.0.520` | Sony Xperia 1 II (SO-51A) | `58.2.B.0.520` | `4.19.157-perf+` |
+| `so-52a-58.2.B.0.520` | Sony Xperia 5 II (SO-52A) | `58.2.B.0.520` | `4.19.157-perf+` |
+| `sog01-58.2.C.5.10` | Sony Xperia 1 II (SOG01, KDDI) | `58.2.C.5.10` | `4.19.157-perf+` |
 
 ## Build and run
 

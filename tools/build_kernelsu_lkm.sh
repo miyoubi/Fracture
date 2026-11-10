@@ -28,7 +28,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PROJECT=${PROJECT:-sog02-58.2.C.3.127}
-KERNEL_DIR=${KERNEL_DIR:-$ROOT/stockkernel_sony_sm8250-main}
+KERNEL_DIR=${KERNEL_DIR:-$ROOT/kernel_sony_sm8250}
 KSU_DIR=${KSU_DIR:-$ROOT/KernelSU}
 KSU_URL=${KSU_URL:-https://github.com/backslashxx/KernelSU}
 KSU_REF_GIVEN=${KSU_REF+1}
@@ -42,6 +42,7 @@ VMLINUX=${VMLINUX:-}
 KCFLAGS_EXTRA=${KCFLAGS_EXTRA:-}
 JOBS=${JOBS:-$(nproc 2>/dev/null || echo 4)}
 GEN_SYMVERS=${GEN_SYMVERS:-$ROOT/gen_symvers.py}
+CONFIG_FILE=${CONFIG_FILE:-}
 PULL=0
 
 log() { printf '[lkm] %s\n' "$*"; }
@@ -57,6 +58,8 @@ Options:
   --ref REF           KernelSU branch to build (default: staging)
   --commit SHA        build an exact commit (overrides --ref)
   --vmlinux PATH      regenerate Module.symvers from this vmlinux
+  --symvers PATH      use this Module.symvers (skips generation)
+  --config PATH       copy this .config into the kernel tree before building
   --out DIR           output directory (default: build/<project>)
   -j, --jobs N        parallel make jobs
   -h, --help          show this help
@@ -82,6 +85,14 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || die "--vmlinux needs a value"
             VMLINUX=$2; shift ;;
         --vmlinux=*) VMLINUX=${1#*=} ;;
+        --symvers)
+            [ $# -ge 2 ] || die "--symvers needs a value"
+            SYMVERS=$2; shift ;;
+        --symvers=*) SYMVERS=${1#*=} ;;
+        --config)
+            [ $# -ge 2 ] || die "--config needs a value"
+            CONFIG_FILE=$2; shift ;;
+        --config=*) CONFIG_FILE=${1#*=} ;;
         --out)
             [ $# -ge 2 ] || die "--out needs a value"
             OUT=$2; shift ;;
@@ -97,7 +108,12 @@ while [ $# -gt 0 ]; do
 done
 
 [ -d "$KERNEL_DIR" ] || die "kernel tree not found: $KERNEL_DIR"
-[ -f "$KERNEL_DIR/.config" ] || die "no .config in $KERNEL_DIR"
+if [ -n "$CONFIG_FILE" ]; then
+    [ -f "$CONFIG_FILE" ] || die "config not found: $CONFIG_FILE"
+    cp "$CONFIG_FILE" "$KERNEL_DIR/.config"
+    log "using config $CONFIG_FILE"
+fi
+[ -f "$KERNEL_DIR/.config" ] || die "no .config in $KERNEL_DIR (pass --config PATH)"
 [ -d "$NDK_ROOT" ] || die "NDK not found: $NDK_ROOT (set NDK_ROOT)"
 
 NDK_BIN=$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
@@ -178,6 +194,7 @@ MAKE_ARGS=(
 export PATH="$NDK_BIN:$PATH"
 make -C "$KERNEL_DIR" "${MAKE_ARGS[@]}" olddefconfig >/dev/null
 make -C "$KERNEL_DIR" "${MAKE_ARGS[@]}" syncconfig >/dev/null
+make -C "$KERNEL_DIR" "${MAKE_ARGS[@]}" modules_prepare >/dev/null
 grep -q '^CONFIG_KSU=m$' "$KERNEL_DIR/include/config/auto.conf" \
     || die "CONFIG_KSU=m missing from auto.conf (Kconfig source not applied?)"
 

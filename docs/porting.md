@@ -1,7 +1,27 @@
-# Porting to another 4.19.157 Sony (SO-51A / SO-52A)
+# Porting to another 4.19.157 Sony (SO-51A / SO-52A / SOG01)
 
-There are no SO-51A / SO-52A (or 58.2.B.0.520) test results yet; the
-only profile in the repository is `sog02-58.2.C.3.127`.
+Profiles in the tree, derived from the split_img kernels with
+`vmlinux-to-elf` and verified against the disassembly:
+
+| Project | `selinux_state` | store gadget | switch return |
+| --- | --- | --- | --- |
+| `sog02-58.2.C.3.127` | `0x31ad000` | `0x427410` | `0x117228` |
+| `so-52a-58.2.B.0.520` | `0x31ad000` | `0x427410` | `0x117228` |
+| `so-51a-58.2.B.0.520` | `0x31ae000` | `0x424350` | `0x117228` |
+| `sog01-58.2.C.5.10` | `0x31ae000` | `0x424350` | `0x117228` |
+
+All four kernels put `_text` at `0xffffff8008080000`, `__switch_to` at
+`+0x88c0` (continuation `+0x89fc`), and share the task_struct/cred layout
+(`cpu_context 0xaf0`, `cred 0x7d8/0x7e0`, `comm 0x7e8`, `tasks 0x530`,
+`pid/tgid 0x630/0x634`, `group_leader 0x670`, `state 0x58`, stride
+`0xec0`, `cred->security 0x78`), so only `selinux_state` and the store
+gadget differ.
+
+The SO-51A/SO-52A/SOG01 `Module.symvers` are identical (`module_layout`
+`0xaaf6c76c`), so one KernelSU LKM built against `kernel_sony_sm8250`
+covers all three.  Extract a device config with
+`kernel_sony_sm8250/scripts/extract-ikconfig <Image>` and build with
+`tools/build_kernelsu_lkm.sh --config <config> --symvers <Module.symvers>`.
 
 ## Reusable, but not plug-and-play
 

@@ -17,7 +17,7 @@ The script automates:
 1. clone/use `backslashxx/KernelSU` in `KernelSU/`; with `--pull` fetch and
    check out `origin/staging` (staging is force-updated, the local branch
    can be stale). Without `--pull` the current checkout is built as-is.
-2. copy `kernel/` into `stockkernel_sony_sm8250-main/KernelSU/kernel`
+2. copy `kernel/` into `kernel_sony_sm8250/KernelSU/kernel`
    and source its Kconfig from the tree Kconfig.
 3. `.config`: `CONFIG_KSU=m`, `CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y`,
    `CONFIG_KSU_LSM_SECURITY_HOOKS=y`; `KALLSYMS_ALL=y` is already in the
