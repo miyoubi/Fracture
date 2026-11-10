@@ -13,11 +13,16 @@
 # KernelSU fork: https://github.com/backslashxx/KernelSU
 # modpost/KALLSYMS_ALL tweak: backslashxx/kernel_xiaomi_sm6225@dd352cb
 #
+# Without --pull the script never fetches: it builds whatever is checked out
+# in $KSU_DIR and only clones when that directory is missing.
+#
 # Usage:
-#   tools/build_kernelsu_lkm.sh                       # builds origin/staging
-#   KSU_REF=master tools/build_kernelsu_lkm.sh        # builds a branch
-#   KSU_COMMIT=e2f2e397 tools/build_kernelsu_lkm.sh   # builds an exact commit
-#   VMLINUX=/path/vmlinux.elf tools/build_kernelsu_lkm.sh  # regenerate symvers
+#   tools/build_kernelsu_lkm.sh                 # build the current checkout
+#   tools/build_kernelsu_lkm.sh --pull          # fetch, then build origin/staging
+#   tools/build_kernelsu_lkm.sh --pull --ref master
+#   tools/build_kernelsu_lkm.sh --commit e2f2e397
+#   tools/build_kernelsu_lkm.sh --vmlinux /path/vmlinux.elf
+#   tools/build_kernelsu_lkm.sh --help
 #
 set -euo pipefail
 
@@ -26,6 +31,7 @@ PROJECT=${PROJECT:-sog02-58.2.C.3.127}
 KERNEL_DIR=${KERNEL_DIR:-$ROOT/stockkernel_sony_sm8250-main}
 KSU_DIR=${KSU_DIR:-$ROOT/KernelSU}
 KSU_URL=${KSU_URL:-https://github.com/backslashxx/KernelSU}
+KSU_REF_GIVEN=${KSU_REF+1}
 KSU_REF=${KSU_REF:-staging}
 KSU_COMMIT=${KSU_COMMIT:-}
 NDK_ROOT=${NDK_ROOT:-$ROOT/android-ndk-r26d}
@@ -36,13 +42,59 @@ VMLINUX=${VMLINUX:-}
 KCFLAGS_EXTRA=${KCFLAGS_EXTRA:-}
 JOBS=${JOBS:-$(nproc 2>/dev/null || echo 4)}
 GEN_SYMVERS=${GEN_SYMVERS:-$ROOT/gen_symvers.py}
+PULL=0
 
 log() { printf '[lkm] %s\n' "$*"; }
 die() { printf '[lkm] error: %s\n' "$*" >&2; exit 1; }
 
-case "${1:-}" in
-    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-esac
+usage() {
+    sed -n '/^# Usage:/,/^#   tools\/build_kernelsu_lkm.sh --help/p' "$0" \
+        | sed 's/^# \{0,1\}//'
+    cat <<'EOF'
+
+Options:
+  --pull              fetch KernelSU before building (off by default)
+  --ref REF           KernelSU branch to build (default: staging)
+  --commit SHA        build an exact commit (overrides --ref)
+  --vmlinux PATH      regenerate Module.symvers from this vmlinux
+  --out DIR           output directory (default: build/<project>)
+  -j, --jobs N        parallel make jobs
+  -h, --help          show this help
+
+Environment variables (PROJECT, KERNEL_DIR, KSU_DIR, KSU_URL, KSU_REF,
+KSU_COMMIT, NDK_ROOT, API, OUT, SYMVERS, VMLINUX, KCFLAGS_EXTRA, JOBS) are
+still honored; the flags above override them.
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pull) PULL=1 ;;
+        --ref)
+            [ $# -ge 2 ] || die "--ref needs a value"
+            KSU_REF=$2; KSU_REF_GIVEN=1; shift ;;
+        --ref=*) KSU_REF=${1#*=}; KSU_REF_GIVEN=1 ;;
+        --commit)
+            [ $# -ge 2 ] || die "--commit needs a value"
+            KSU_COMMIT=$2; shift ;;
+        --commit=*) KSU_COMMIT=${1#*=} ;;
+        --vmlinux)
+            [ $# -ge 2 ] || die "--vmlinux needs a value"
+            VMLINUX=$2; shift ;;
+        --vmlinux=*) VMLINUX=${1#*=} ;;
+        --out)
+            [ $# -ge 2 ] || die "--out needs a value"
+            OUT=$2; shift ;;
+        --out=*) OUT=${1#*=} ;;
+        -j|--jobs)
+            [ $# -ge 2 ] || die "$1 needs a value"
+            JOBS=$2; shift ;;
+        --jobs=*) JOBS=${1#*=} ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
 
 [ -d "$KERNEL_DIR" ] || die "kernel tree not found: $KERNEL_DIR"
 [ -f "$KERNEL_DIR/.config" ] || die "no .config in $KERNEL_DIR"
@@ -56,17 +108,29 @@ command -v python3 >/dev/null || die "python3 not found"
 command -v gcc >/dev/null || die "host gcc not found"
 
 # 1. KernelSU source
+CLONED=0
 if [ ! -d "$KSU_DIR/.git" ]; then
     log "cloning $KSU_URL -> $KSU_DIR"
     git clone --filter=blob:none "$KSU_URL" "$KSU_DIR"
+    CLONED=1
 fi
-git -C "$KSU_DIR" fetch origin --tags
+if [ "$PULL" = 1 ]; then
+    log "fetching origin --tags"
+    git -C "$KSU_DIR" fetch origin --tags
+fi
 if [ -n "$KSU_COMMIT" ]; then
-    git -C "$KSU_DIR" checkout --quiet "$KSU_COMMIT"
-else
+    git -C "$KSU_DIR" checkout --quiet "$KSU_COMMIT" 2>/dev/null \
+        || die "commit $KSU_COMMIT is not in $KSU_DIR; rerun with --pull"
+elif [ "$PULL" = 1 ] || [ "$CLONED" = 1 ]; then
     # Follow the fetched remote ref: staging is force-updated, and the local
     # branch can be stale (e.g. e2f2e397 vs origin/staging 4269960c).
-    git -C "$KSU_DIR" checkout --quiet -B "$KSU_REF" "origin/$KSU_REF"
+    git -C "$KSU_DIR" checkout --quiet -B "$KSU_REF" "origin/$KSU_REF" \
+        || die "cannot check out origin/$KSU_REF"
+elif [ "$KSU_REF_GIVEN" = 1 ]; then
+    if ! git -C "$KSU_DIR" checkout --quiet "$KSU_REF" 2>/dev/null; then
+        git -C "$KSU_DIR" checkout --quiet -B "$KSU_REF" "origin/$KSU_REF" 2>/dev/null \
+            || die "ref $KSU_REF is not in $KSU_DIR; rerun with --pull"
+    fi
 fi
 KSU_REV=$(git -C "$KSU_DIR" rev-parse --short HEAD)
 log "KernelSU $KSU_REV ($(git -C "$KSU_DIR" describe --tags --always 2>/dev/null || echo "$KSU_REV"))"

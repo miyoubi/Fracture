@@ -14,9 +14,9 @@ for a usable `su`; this repository only late-loads the kernel module.
 
 The script automates:
 
-1. clone/fetch `backslashxx/KernelSU`, check out `origin/staging`
-   (following the fetched ref; staging is force-updated, the local
-   branch can be stale).
+1. clone/use `backslashxx/KernelSU` in `KernelSU/`; with `--pull` fetch and
+   check out `origin/staging` (staging is force-updated, the local branch
+   can be stale). Without `--pull` the current checkout is built as-is.
 2. copy `kernel/` into `stockkernel_sony_sm8250-main/KernelSU/kernel`
    and source its Kconfig from the tree Kconfig.
 3. `.config`: `CONFIG_KSU=m`, `CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y`,

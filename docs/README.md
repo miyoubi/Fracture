@@ -22,7 +22,7 @@ late-load KernelSU LKM; they are not a polished write-up.
   child. The custom su client/daemon was removed; root is expected to
   come from the KernelSU userspace.
 - `tools/build_kernelsu_lkm.sh` builds the LKM from
-  `backslashxx/KernelSU` (`origin/staging`).
+  `backslashxx/KernelSU` (the existing checkout; `--pull` updates it).
 - `tools/policy_fix.sh` + `tools/sepolicy.rule` + `tools/su_env` cover
   the SELinux/property-service side.
 

@@ -165,17 +165,19 @@ the stock Sony 4.19 tree:
 `tools/build_kernelsu_lkm.sh` automates the whole flow:
 
 ```sh
-tools/build_kernelsu_lkm.sh                             # origin/staging (default)
-KSU_REF=master tools/build_kernelsu_lkm.sh              # a branch
-KSU_COMMIT=<sha> tools/build_kernelsu_lkm.sh            # an exact commit
-VMLINUX=/path/vmlinux.elf tools/build_kernelsu_lkm.sh   # regenerate full symvers
+tools/build_kernelsu_lkm.sh                    # build the existing KernelSU checkout
+tools/build_kernelsu_lkm.sh --pull             # fetch, then build origin/staging
+tools/build_kernelsu_lkm.sh --pull --ref master        # fetch then build a branch
+tools/build_kernelsu_lkm.sh --commit <sha>     # an exact commit
+tools/build_kernelsu_lkm.sh --vmlinux /path/vmlinux.elf  # regenerate full symvers
 ```
 
-It fetches the fork, copies `kernel/` into the stock tree, wires Kconfig
-and `CONFIG_KSU=m`, generates `compile.h` / `flask.h` / `av_permissions.h`,
-ensures the device `Module.symvers` (via `gen_symvers.py`), builds the
-module, verifies there are no GOT/PAuth relocations, and stages
-`build/<project>/kernelsu.ko`.
+It clones the fork once (when `KernelSU/` is missing) and otherwise leaves
+the checkout alone unless `--pull` is given. It copies `kernel/` into the
+stock tree, wires Kconfig and `CONFIG_KSU=m`, generates `compile.h` /
+`flask.h` / `av_permissions.h`, ensures the device `Module.symvers` (via
+`gen_symvers.py`), builds the module, verifies there are no GOT/PAuth
+relocations, and stages `build/<project>/kernelsu.ko`.
 
 ## Credits
 
