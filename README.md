@@ -1,5 +1,9 @@
 # CVE-2023-33107 Xperia root
 
+> **Warning**
+>
+> I am not responsible for any damage to your device.
+
 KGSL UAF temporary-root exploit for the Sony Xperia 1 II / 5 II family
 (SO-51A, SO-52A, SOG01, SOG02).  It
 patches the process credentials, flips SELinux permissive through the
@@ -20,6 +24,24 @@ plus its userspace.
 - [docs/primitive.md](docs/primitive.md) — primitive and SELinux notes.
 - [docs/porting.md](docs/porting.md) — profiles and deriving new offsets.
 - [docs/kernelsu-late-load.md](docs/kernelsu-late-load.md) — the LKM and late-load.
+
+## Usage
+
+1. Build and push the exploit + LKM for your profile:
+
+   ```sh
+   ./build.sh -p <project> --push
+   ```
+
+2. Install the [backslashxx/KernelSU](https://github.com/backslashxx/KernelSU/)
+   manager. It is the only supported manager; the LKM is built from this
+   fork.
+
+3. Run the exploit:
+
+   ```sh
+   adb shell /data/local/tmp/kgsl_root_su
+   ```
 
 ## Build and run
 
