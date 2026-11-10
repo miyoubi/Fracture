@@ -142,6 +142,7 @@ is denied; the exploit prints the reason.
 | `KGSL_RACE_RETRY_MS` | `200` | settle time between race attempts (0..5000) |
 | `KGSL_SCAN_FULL` | off | setting it skips the full-scan fallback; unset lets a miss retry the full scan |
 | `KGSL_ROUNDS` | `8` | exploit rounds (1..16) |
+| `KGSL_RETRY` | `0` | internal; the exploit restarts itself when the permissive store misses (max 3 attempts) |
 
 ```sh
 # default: permissive + LKM + ksud late-load

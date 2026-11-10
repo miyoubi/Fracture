@@ -84,6 +84,12 @@ The credential aliases were found but none verified.
 The proper `setenforce` write was denied; the forged `thread.cpu_context`
 hijack is the fallback.
 
+The exploit now waits for the selected child to be parked (`/proc` state
+`S`) before arming and auto-restarts up to 3 times if `enforce` is still
+`1`; the log shows `[*] child ... not parked` or
+`[*] permissive missed; restarting (attempt N)`.  If it never lands,
+re-check the profile's `selinux_state`/store gadget and the child state.
+
 - If the hijack also reports `enforce=1`, the store did not land:
   wrong `selinux_state_off`/store gadget for the booted kernel, or the
   KernelSU module is already Live and its `selinux_hide` interferes.
