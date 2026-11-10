@@ -52,10 +52,13 @@ The simplest path:
 ./build.sh -p sog02-58.2.C.3.127           # build exploit + LKM (no push)
 ./build.sh -p sog02-58.2.C.3.127 --push    # build + push
 ./build.sh --detect --push --run           # connected device: push + run
+./build.sh --setup                         # fetch the NDK and kernel if missing
 ```
 
 Profiles are SOG02, SO-51A, SO-52A and SOG01. Pushing is opt-in with
-`--push`; the pushed files are verified by md5.
+`--push`; the pushed files are verified by md5. `--setup` downloads
+`android-ndk-r26d` and clones `kernel_sony_sm8250` when they are missing;
+`--force --setup` deletes and re-fetches both.
 
 Manual equivalent:
 

@@ -24,6 +24,8 @@ NDK="$ROOT/android-ndk-r26d"
 JOBS=""
 LIST_ONLY=0
 DETECT=0
+SETUP=0
+FORCE=0
 
 log() { printf '[build] %s\n' "$*"; }
 die() { printf '[build] error: %s\n' "$*" >&2; exit 1; }
@@ -39,6 +41,8 @@ Options:
   -s, --serial SERIAL  adb serial (or ANDROID_SERIAL)
   -P, --push           push both binaries to /data/local/tmp (off by default)
   -r, --run            push and run the exploit (implies --push)
+      --setup          download the NDK and clone the kernel if missing
+      --force          with --setup, delete and re-fetch both
       --pull           fetch KernelSU before building
       --config PATH    kernel .config (default: tree copy, else device)
       --symvers PATH   Module.symvers (default: tree copy)
@@ -54,6 +58,7 @@ Examples:
   ./build.sh -p sog02-58.2.C.3.127 --push       # build + push
   ./build.sh --detect --push --run              # connected device; push + run
   ./build.sh -s QV7246YW54 -p sog02-58.2.C.3.127 --push
+  ./build.sh --setup                            # fetch the NDK and kernel
 EOF
 }
 
@@ -68,6 +73,8 @@ while [ $# -gt 0 ]; do
         -n|--no-push)  PUSH=0 ;;
         -P|--push)     PUSH=1 ;;
         -r|--run)      RUN=1 ;;
+        --setup)       SETUP=1 ;;
+        --force)       FORCE=1; SETUP=1 ;;
         --pull)        PULL=1 ;;
         --config)      [ $# -ge 2 ] || die "$1 needs a value"; CONFIG=$2; shift ;;
         --symvers)     [ $# -ge 2 ] || die "$1 needs a value"; SYMVERS=$2; shift ;;
@@ -120,6 +127,48 @@ list_targets() {
     printf 'Example: ./build.sh -p sog02-58.2.C.3.127 [--push]\n'
 }
 
+setup_components() {
+    local ndk="$ROOT/android-ndk-r26d"
+    local kdir="$ROOT/kernel_sony_sm8250"
+    local ndk_url="https://dl.google.com/android/repository/android-ndk-r26d-linux.zip"
+    local kernel_url="https://github.com/miyoubi/stock-kernel_sony_sm8250"
+
+    if [ -e "$ndk" ] && [ "$FORCE" = 0 ]; then
+        log "NDK already present: $ndk"
+    else
+        if [ "$FORCE" = 1 ] && [ -e "$ndk" ]; then
+            log "removing $ndk (--force)"
+            rm -rf "$ndk"
+        fi
+        command -v unzip >/dev/null 2>&1 || die "unzip is required for --setup"
+        command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1             || die "curl or wget is required for --setup"
+        local zip="$ROOT/.android-ndk-r26d-linux.zip"
+        log "downloading android-ndk-r26d-linux.zip"
+        if command -v curl >/dev/null 2>&1; then
+            curl -L --fail -o "$zip" "$ndk_url" || die "NDK download failed"
+        else
+            wget -O "$zip" "$ndk_url" || die "NDK download failed"
+        fi
+        log "extracting the NDK"
+        unzip -q -o "$zip" -d "$ROOT" || die "NDK extraction failed"
+        rm -f "$zip"
+        [ -d "$ndk" ] || die "NDK archive did not produce $ndk"
+    fi
+
+    if [ -e "$kdir" ] && [ "$FORCE" = 0 ]; then
+        log "kernel tree already present: $kdir"
+    else
+        if [ "$FORCE" = 1 ] && [ -e "$kdir" ]; then
+            log "removing $kdir (--force)"
+            rm -rf "$kdir"
+        fi
+        command -v git >/dev/null 2>&1 || die "git is required for --setup"
+        log "cloning the kernel from GitHub"
+        git clone --depth=1 "$kernel_url" "$kdir" || die "kernel clone failed"
+        git -C "$kdir" rev-parse --verify HEAD >/dev/null 2>&1             || die "kernel clone is empty; push the repository first"
+    fi
+}
+
 detect_project() {
     command -v adb >/dev/null || die "adb not found; pass --project"
     local model build list prefix matches exact
@@ -148,10 +197,18 @@ if [ "$LIST_ONLY" = 1 ]; then
     exit 0
 fi
 
+if [ "$SETUP" = 1 ]; then
+    setup_components
+fi
+
 [ -d "$ROOT/src" ] || die "run this from the repository root"
 if [ -z "$PROJECT" ]; then
     if [ "$DETECT" = 1 ]; then
         PROJECT=$(detect_project)
+    elif [ "$SETUP" = 1 ]; then
+        log "setup complete"
+        list_targets
+        exit 0
     else
         die "pass -p <project> (run ./build.sh with no arguments to list targets)"
     fi
