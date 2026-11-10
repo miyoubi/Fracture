@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build the exploit and the KernelSU LKM for the connected Sony Xperia,
-# then push both to /data/local/tmp.
+# Build the exploit and the KernelSU LKM for a Sony Xperia profile.
+# Pushing to the device is opt-in with --push.
 #
 #   ./build.sh                        # list the available targets
-#   ./build.sh -p sog02-58.2.C.3.127  # build + push for a profile
-#   ./build.sh -p so-52a-58.2.B.0.520 --no-push
-#   ./build.sh --detect --run         # opt-in: use the connected device
+#   ./build.sh -p sog02-58.2.C.3.127  # build only
+#   ./build.sh -p sog02-58.2.C.3.127 --push
+#   ./build.sh --detect --push --run  # connected device; push + run
 #   ./build.sh -s <serial> --pull     # multiple devices; update KernelSU
 #
 set -euo pipefail
@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")" && pwd)
 PROJECT=""
 SERIAL="${ANDROID_SERIAL:-}"
-PUSH=1
+PUSH=0
 RUN=0
 PULL=0
 CONFIG=""
@@ -37,8 +37,8 @@ Options:
   -p, --project NAME   profile from `make list-projects` (else use --detect)
   -d, --detect         use the connected device's model/build
   -s, --serial SERIAL  adb serial (or ANDROID_SERIAL)
-  -n, --no-push        build only
-  -r, --run            run the exploit after pushing
+  -P, --push           push both binaries to /data/local/tmp (off by default)
+  -r, --run            push and run the exploit (implies --push)
       --pull           fetch KernelSU before building
       --config PATH    kernel .config (default: tree copy, else device)
       --symvers PATH   Module.symvers (default: tree copy)
@@ -49,11 +49,11 @@ Options:
   -h, --help           this help
 
 Examples:
-  ./build.sh                                  # list targets
-  ./build.sh -p sog02-58.2.C.3.127 --run
-  ./build.sh --detect                         # use the connected device
-  ./build.sh -p so-51a-58.2.B.0.520 --no-push
-  ./build.sh -s QV7246YW54 -p sog02-58.2.C.3.127 --run
+  ./build.sh                                    # list targets
+  ./build.sh -p sog02-58.2.C.3.127              # build only
+  ./build.sh -p sog02-58.2.C.3.127 --push       # build + push
+  ./build.sh --detect --push --run              # connected device; push + run
+  ./build.sh -s QV7246YW54 -p sog02-58.2.C.3.127 --push
 EOF
 }
 
@@ -66,6 +66,7 @@ while [ $# -gt 0 ]; do
         -d|--detect)   DETECT=1 ;;
         -s|--serial)   [ $# -ge 2 ] || die "$1 needs a value"; SERIAL=$2; shift ;;
         -n|--no-push)  PUSH=0 ;;
+        -P|--push)     PUSH=1 ;;
         -r|--run)      RUN=1 ;;
         --pull)        PULL=1 ;;
         --config)      [ $# -ge 2 ] || die "$1 needs a value"; CONFIG=$2; shift ;;
@@ -79,6 +80,10 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+if [ "$RUN" = 1 ]; then
+    PUSH=1
+fi
 
 adb_cmd() {
     if [ -n "$SERIAL" ]; then adb -s "$SERIAL" "$@"; else adb "$@"; fi
@@ -112,7 +117,7 @@ list_targets() {
             done <<< "$devs"
         fi
     fi
-    printf '\nExample: ./build.sh -p sog02-58.2.C.3.127\n'
+    printf 'Example: ./build.sh -p sog02-58.2.C.3.127 [--push]\n'
 }
 
 detect_project() {
@@ -199,10 +204,11 @@ KO="$ROOT/build/$PROJECT/kernelsu.ko"
 if [ "$PUSH" = 0 ]; then
     log "build only: $EXPLOIT"
     log "build only: $KO"
+    log "add --push to install them on the device"
     exit 0
 fi
 
-command -v adb >/dev/null || die "adb not found (use --no-push to build only)"
+command -v adb >/dev/null || die "adb not found; cannot --push"
 log "pushing to /data/local/tmp"
 adb_cmd push "$EXPLOIT" /data/local/tmp/kgsl_root_su
 adb_cmd push "$KO" /data/local/tmp/kernelsu.ko

@@ -26,13 +26,14 @@ plus its userspace.
 The simplest path:
 
 ```sh
-./build.sh                        # list the available targets
-./build.sh -p sog02-58.2.C.3.127   # build exploit + LKM, push both
-./build.sh --detect --run          # opt-in: use the connected device
+./build.sh                                 # list the available targets
+./build.sh -p sog02-58.2.C.3.127           # build exploit + LKM (no push)
+./build.sh -p sog02-58.2.C.3.127 --push    # build + push
+./build.sh --detect --push --run           # connected device: push + run
 ```
 
-Profiles are SOG02, SO-51A, SO-52A and SOG01. It verifies the pushed
-files by md5; `--no-push` skips adb.
+Profiles are SOG02, SO-51A, SO-52A and SOG01. Pushing is opt-in with
+`--push`; the pushed files are verified by md5.
 
 Manual equivalent:
 
