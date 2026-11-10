@@ -61,6 +61,20 @@ The NDK (`android-ndk-r26d`) and the kernel tree are fetched by
    adb shell /data/local/tmp/kgsl_root_su
    ```
 
+## Custom paths
+
+By default the helper uses `./kernel_sony_sm8250` and `./android-ndk-r26d`.
+If your kernel source or NDK live elsewhere, point it at them:
+
+```sh
+./build.sh -p sog02-58.2.C.3.127 \
+  --kernel-dir /home/exer/kernelsrc \
+  --ndk /ndklocation
+```
+
+These flags override the defaults for the build; `--setup` still populates
+the default `./kernel_sony_sm8250` and `./android-ndk-r26d`.
+
 ## Build and run
 
 The simplest path:
