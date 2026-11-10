@@ -25,6 +25,24 @@ plus its userspace.
 - [docs/porting.md](docs/porting.md) — profiles and deriving new offsets.
 - [docs/kernelsu-late-load.md](docs/kernelsu-late-load.md) — the LKM and late-load.
 
+## Dependencies (Arch Linux)
+
+Official repositories:
+
+```sh
+sudo pacman -S --needed base-devel git curl unzip bc bison flex pahole \
+  android-tools python
+```
+
+`vmlinux-to-elf` is not in the official repositories; install it from the AUR:
+
+```sh
+paru -S vmlinux-to-elf
+```
+
+The NDK (`android-ndk-r26d`) and the kernel tree are fetched by
+`./build.sh --setup`; no manual download is needed.
+
 ## Usage
 
 1. Build and push the exploit + LKM for your profile:
