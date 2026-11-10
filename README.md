@@ -23,16 +23,16 @@ plus its userspace.
 
 ## Build and run
 
-The simplest path with a device connected:
+The simplest path:
 
 ```sh
-./build.sh            # detect the model/build, build exploit + LKM, push both
-./build.sh --run      # ...and start the exploit
+./build.sh                        # list the available targets
+./build.sh -p sog02-58.2.C.3.127   # build exploit + LKM, push both
+./build.sh --detect --run          # opt-in: use the connected device
 ```
 
-It picks the profile from `ro.product.model` / `ro.build.display.id`
-(SOG02, SO-51A, SO-52A, SOG01), verifies the pushed files by md5, and
-only needs `--project` for a cross-build; `--no-push` skips adb.
+Profiles are SOG02, SO-51A, SO-52A and SOG01. It verifies the pushed
+files by md5; `--no-push` skips adb.
 
 Manual equivalent:
 

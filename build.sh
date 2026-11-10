@@ -2,10 +2,10 @@
 # Build the exploit and the KernelSU LKM for the connected Sony Xperia,
 # then push both to /data/local/tmp.
 #
-#   ./build.sh                        # auto-detect the device, build, push
-#   ./build.sh --run                  # ...and start the exploit
-#   ./build.sh -p so-52a-58.2.B.0.520 # cross-build for a specific profile
-#   ./build.sh --no-push              # build only
+#   ./build.sh                        # list the available targets
+#   ./build.sh -p sog02-58.2.C.3.127  # build + push for a profile
+#   ./build.sh -p so-52a-58.2.B.0.520 --no-push
+#   ./build.sh --detect --run         # opt-in: use the connected device
 #   ./build.sh -s <serial> --pull     # multiple devices; update KernelSU
 #
 set -euo pipefail
@@ -22,6 +22,8 @@ VMLINUX=""
 KERNEL_DIR="$ROOT/kernel_sony_sm8250"
 NDK="$ROOT/android-ndk-r26d"
 JOBS=""
+LIST_ONLY=0
+DETECT=0
 
 log() { printf '[build] %s\n' "$*"; }
 die() { printf '[build] error: %s\n' "$*" >&2; exit 1; }
@@ -32,7 +34,8 @@ usage() {
     cat <<'EOF'
 
 Options:
-  -p, --project NAME   profile from `make list-projects`
+  -p, --project NAME   profile from `make list-projects` (else use --detect)
+  -d, --detect         use the connected device's model/build
   -s, --serial SERIAL  adb serial (or ANDROID_SERIAL)
   -n, --no-push        build only
   -r, --run            run the exploit after pushing
@@ -46,15 +49,21 @@ Options:
   -h, --help           this help
 
 Examples:
-  ./build.sh
+  ./build.sh                                  # list targets
+  ./build.sh -p sog02-58.2.C.3.127 --run
+  ./build.sh --detect                         # use the connected device
   ./build.sh -p so-51a-58.2.B.0.520 --no-push
-  ./build.sh -s QV7246YW54 --run
+  ./build.sh -s QV7246YW54 -p sog02-58.2.C.3.127 --run
 EOF
 }
+
+ARG_COUNT=$#
+[ "$ARG_COUNT" -eq 0 ] && LIST_ONLY=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -p|--project)  [ $# -ge 2 ] || die "$1 needs a value"; PROJECT=$2; shift ;;
+        -d|--detect)   DETECT=1 ;;
         -s|--serial)   [ $# -ge 2 ] || die "$1 needs a value"; SERIAL=$2; shift ;;
         -n|--no-push)  PUSH=0 ;;
         -r|--run)      RUN=1 ;;
@@ -77,6 +86,33 @@ adb_cmd() {
 
 device_prop() {
     adb_cmd shell getprop "$1" 2>/dev/null | tr -d '\r'
+}
+
+list_targets() {
+    local p model kernel devs d m b
+    printf 'Available build targets:\n\n'
+    printf '  %-26s %-10s %s\n' "project" "model" "kernel"
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        model=$(printf '%s' "${p%%-58*}" | tr '[:lower:]' '[:upper:]')
+        kernel=$(grep -m1 'TARGET_KERNEL_RELEASE' \
+                "$ROOT/src/targets/$p/target.h" 2>/dev/null | cut -d'"' -f2)
+        printf '  %-26s %-10s %s\n' "$p" "${model:-?}" "${kernel:-?}"
+    done < <(make -s -C "$ROOT" list-projects)
+
+    if command -v adb >/dev/null 2>&1; then
+        devs=$(adb devices 2>/dev/null | awk 'NR > 1 && $2 == "device" { print $1 }')
+        if [ -n "$devs" ]; then
+            printf '\nConnected devices (not auto-selected; use -p or --detect):\n'
+            while IFS= read -r d; do
+                [ -n "$d" ] || continue
+                m=$(adb -s "$d" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
+                b=$(adb -s "$d" shell getprop ro.build.display.id 2>/dev/null | tr -d '\r')
+                printf '  %-22s %-10s %s\n' "$d" "${m:-?}" "${b:-?}"
+            done <<< "$devs"
+        fi
+    fi
+    printf '\nExample: ./build.sh -p sog02-58.2.C.3.127\n'
 }
 
 detect_project() {
@@ -102,8 +138,19 @@ detect_project() {
     die "no profile for $model/${build:-?}; use --project (make list-projects)"
 }
 
+if [ "$LIST_ONLY" = 1 ]; then
+    list_targets
+    exit 0
+fi
+
 [ -d "$ROOT/src" ] || die "run this from the repository root"
-[ -n "$PROJECT" ] || PROJECT=$(detect_project)
+if [ -z "$PROJECT" ]; then
+    if [ "$DETECT" = 1 ]; then
+        PROJECT=$(detect_project)
+    else
+        die "pass -p <project> (run ./build.sh with no arguments to list targets)"
+    fi
+fi
 [ -d "$ROOT/src/targets/$PROJECT" ] \
     || die "unknown project $PROJECT (make list-projects)"
 [ -d "$KERNEL_DIR" ] || die "kernel tree not found: $KERNEL_DIR"
