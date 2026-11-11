@@ -34,9 +34,13 @@ COMPILER ?= $(or $(ANDROID_CC),\
 CFLAGS ?= -O2 -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable -fPIE -pthread
 LDFLAGS ?= -pie -pthread -ldl
 
-.PHONY: all clean info list-projects
+.PHONY: all bin lib clean info list-projects
 
-all: $(TARGET) $(LIB)
+all: bin lib
+
+bin: $(TARGET)
+
+lib: $(LIB)
 
 $(TARGET): $(SOURCES) $(HEADERS)
 	mkdir -p $(OUTDIR)
