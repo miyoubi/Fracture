@@ -15,6 +15,7 @@ PROJECT=""
 SERIAL="${ANDROID_SERIAL:-}"
 PUSH=0
 RUN=0
+APP=0
 PULL=0
 CONFIG=""
 SYMVERS=""
@@ -41,6 +42,7 @@ Options:
   -s, --serial SERIAL  adb serial (or ANDROID_SERIAL)
   -P, --push           push both binaries to /data/local/tmp (off by default)
   -r, --run            push and run the exploit (implies --push)
+  -a, --app            build the Fracture loader APK (use -p unified)
       --setup          download the NDK and clone the kernel if missing
       --force          with --setup, delete and re-fetch both
       --pull           fetch KernelSU before building
@@ -56,6 +58,7 @@ Examples:
   ./build.sh                                    # list targets
   ./build.sh -p sog02-58.2.C.3.127              # build only
   ./build.sh -p unified                         # one loader, all profiles
+  ./build.sh -p unified --app --push            # loader + Fracture app
   ./build.sh -p sog02-58.2.C.3.127 --push       # build + push
   ./build.sh --detect --push --run              # connected device; push + run
   ./build.sh -s QV7246YW54 -p sog02-58.2.C.3.127 --push
@@ -74,6 +77,7 @@ while [ $# -gt 0 ]; do
         -n|--no-push)  PUSH=0 ;;
         -P|--push)     PUSH=1 ;;
         -r|--run)      RUN=1 ;;
+        -a|--app)      APP=1 ;;
         --setup)       SETUP=1 ;;
         --force)       FORCE=1; SETUP=1 ;;
         --pull)        PULL=1 ;;
@@ -282,11 +286,22 @@ PROJECT="$PROJECT" KERNEL_DIR="$KERNEL_DIR" NDK_ROOT="$NDK" \
 KO="$ROOT/build/$PROJECT/kernelsu.ko"
 [ -f "$KO" ] || die "LKM build produced no $KO"
 
+APK=""
+if [ "$APP" = 1 ]; then
+    log "building the Fracture app"
+    command -v gradle >/dev/null || die "gradle not found (needed for --app)"
+    ( cd "$ROOT/app" && gradle --no-daemon assembleDebug )
+    APK="$ROOT/app/app/build/outputs/apk/debug/app-debug.apk"
+    [ -f "$APK" ] || die "app build produced no $APK"
+    log "built $APK"
+fi
+
 # 3. push
 if [ "$PUSH" = 0 ]; then
     log "build only: $EXPLOIT"
     [ -f "$LIB" ] && log "build only: $LIB"
     log "build only: $KO"
+    [ -n "$APK" ] && log "build only: $APK"
     log "add --push to install them on the device"
     exit 0
 fi
@@ -309,6 +324,11 @@ for pair in "${files[@]}"; do
     [ "$host_md5" = "$dev_md5" ] || die "md5 mismatch for $name"
 done
 log "pushed and verified: /data/local/tmp/kgsl_root_su, /data/local/tmp/kernelsu.ko"
+
+if [ "$APP" = 1 ]; then
+    log "installing the Fracture app"
+    adb_cmd install -r "$APK" || die "app install failed"
+fi
 
 if [ "$RUN" = 1 ]; then
     log "running the exploit"

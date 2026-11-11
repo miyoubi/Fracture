@@ -43,6 +43,24 @@ paru -S vmlinux-to-elf
 The NDK (`android-ndk-r26d`) and the kernel tree are fetched by
 `./build.sh --setup`; no manual download is needed.
 
+### Building the Fracture app
+
+The app build needs a JDK, Gradle, and the Android SDK (platform 35 and
+build-tools); the NDK comes from `./build.sh --setup`.
+
+```sh
+sudo pacman -S --needed jdk-openjdk gradle
+paru -S android-sdk          # AUR; or use Google's cmdline-tools
+export ANDROID_HOME=/opt/android-sdk
+sdkmanager "platforms;android-35" "build-tools;36.0.0"
+```
+
+Then build the unified loader and the app together:
+
+```sh
+./build.sh -p unified --app --push
+```
+
 ## Usage
 
 1. Build and push the exploit + LKM for your profile:
