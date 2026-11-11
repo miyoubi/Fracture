@@ -156,6 +156,18 @@ mkdir -p "$KERNEL_DIR/KernelSU"
 rm -rf "$KERNEL_DIR/KernelSU/kernel"
 cp -a "$KSU_DIR/kernel" "$KERNEL_DIR/KernelSU/kernel"
 
+# backslashxx's legacy 4.19 sepolicy path takes the SELinux policy rwlock
+# with preemption enabled so it can use GFP_KERNEL allocations.  If that
+# task is preempted, rwlock readers spin forever and the MSM watchdog
+# panics (console-ramoops-0).  The fix makes the in-lock insertions atomic
+# and holds the lock with preemption disabled.
+if grep -q 'preempt_enable();' "$KERNEL_DIR/KernelSU/kernel/selinux/rules.c"; then
+    patch -p1 -s -d "$KERNEL_DIR/KernelSU" \
+        < "$ROOT/patches/kernelsu-selinux-rwlock.patch" \
+        || die "failed to apply the KernelSU policy-rwlock fix"
+    log "applied KernelSU policy-rwlock fix"
+fi
+
 if ! grep -q 'source "KernelSU/kernel/Kconfig"' "$KERNEL_DIR/Kconfig"; then
     printf '\nsource "KernelSU/kernel/Kconfig"\n' >> "$KERNEL_DIR/Kconfig"
     log "added KernelSU Kconfig source"
