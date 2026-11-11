@@ -1,6 +1,96 @@
 #define _GNU_SOURCE
 #include "target_profile.h"
 
+#ifdef TARGET_UNIFIED
+
+#include <string.h>
+#include <sys/system_properties.h>
+
+/*
+ * One loader for every supported Xperia.  The table repeats the per-project
+ * target headers; the active entry is selected from the device's model and
+ * firmware build at runtime.
+ */
+#define COMMON_PROFILE_FIELDS                                                 \
+    .kernel_release = "4.19.157-perf+",                                       \
+    .user_ds = 0x0000007fffffffffULL,                                         \
+    .task_stride = 0xec0,                                                     \
+    .task_addr_limit = 0x40,                                                  \
+    .task_real_cred = 0x7d8,                                                  \
+    .task_cred = 0x7e0,                                                       \
+    .task_comm = 0x7e8,                                                       \
+    .task_tasks = 0x530,                                                      \
+    .task_pid = 0x630,                                                        \
+    .task_tgid = 0x634,                                                       \
+    .task_security = 0xad8,                                                   \
+    .task_fake_sec = 0xae0,                                                   \
+    .task_group_leader = 0x670,                                               \
+    .cred_security = 0x78,                                                    \
+    .qsee_context = "u:r:vendor_hal_keymaster_qti:s0",                        \
+    .cred_ids = 0x04,                                                         \
+    .cred_caps = 0x30,                                                        \
+    .cap_last_cap = 37,                                                       \
+    .kernel_text_va = 0xffffff8008080000ULL,                                  \
+    .selinux_word = 0x01000000U,                                              \
+    .task_state = 0x58,                                                       \
+    .task_cpu_context = 0xaf0,                                                \
+    .task_fpsimd = 0xb70,                                                     \
+    .switch_continuation_off = 0x89fcULL,                                     \
+    .gadget_switch_return_off = 0x117228ULL
+
+static const struct target_profile g_profiles[] = {
+    {
+        .model = "SOG02",
+        .build = "58.2.C.3.127",
+        .fingerprint = "KDDI/SOG02_jp_kdi/SOG02:12/58.2.C.3.127/"
+                       "058002C003012704213379541:user/release-keys",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ad000ULL,
+        .gadget_store_off = 0x427410ULL,
+    },
+    {
+        .model = "SO-52A",
+        .build = "58.2.B.0.520",
+        .fingerprint = "SO-52A/58.2.B.0.520",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ad000ULL,
+        .gadget_store_off = 0x427410ULL,
+    },
+    {
+        .model = "SO-51A",
+        .build = "58.2.B.0.520",
+        .fingerprint = "SO-51A/58.2.B.0.520",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ae000ULL,
+        .gadget_store_off = 0x424350ULL,
+    },
+    {
+        .model = "SOG01",
+        .build = "58.2.C.5.10",
+        .fingerprint = "SOG01/58.2.C.5.10",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ae000ULL,
+        .gadget_store_off = 0x424350ULL,
+    },
+};
+
+const struct target_profile *target_profile_get(void) {
+    char model[PROP_VALUE_MAX] = {0};
+    char build[PROP_VALUE_MAX] = {0};
+    __system_property_get("ro.product.model", model);
+    __system_property_get("ro.build.display.id", build);
+
+    for (size_t i = 0; i < sizeof(g_profiles) / sizeof(g_profiles[0]); i++) {
+        if (strcmp(model, g_profiles[i].model) == 0 &&
+            strcmp(build, g_profiles[i].build) == 0) {
+            return &g_profiles[i];
+        }
+    }
+    return NULL;
+}
+
+#else
+
 #include "offset.h"
 
 static const struct target_profile profile = {
@@ -38,3 +128,5 @@ static const struct target_profile profile = {
 const struct target_profile *target_profile_get(void) {
     return &profile;
 }
+
+#endif

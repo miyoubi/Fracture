@@ -6,6 +6,7 @@
 
 struct target_profile {
     const char *model;
+    const char *build;
     const char *fingerprint;
     const char *kernel_release;
     uint64_t user_ds;

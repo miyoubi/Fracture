@@ -2393,6 +2393,11 @@ int main(int argc, char **argv) {
     g_start_ms = now_ms();
 
     g_target = target_profile_get();
+    if (!g_target) {
+        fprintf(stderr, "[-] unsupported device/build"
+                        " (ro.product.model/ro.build.display.id)\n");
+        return 2;
+    }
     printf("[*] target %s, %s\n", g_target->model, g_target->kernel_release);
     if (!g_target->task_addr_limit || !g_target->task_real_cred ||
         !g_target->task_cred || !g_target->task_comm || !g_target->task_stride ||

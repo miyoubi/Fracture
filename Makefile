@@ -3,10 +3,13 @@ PROJECT ?= sog02-58.2.C.3.127
 OUTDIR ?= build/$(PROJECT)
 
 TARGET_DIR := src/targets/$(PROJECT)
+ifeq ($(PROJECT),unified)
+TARGET_HEADER :=
+else
 TARGET_HEADER := $(TARGET_DIR)/target.h
-
 ifeq ($(wildcard $(TARGET_HEADER)),)
 $(error unknown PROJECT=$(PROJECT), missing $(TARGET_HEADER))
+endif
 endif
 
 TARGET := $(OUTDIR)/kgsl_root_su
@@ -15,7 +18,11 @@ SOURCES := src/main.c src/target_profile.c \
            src/selinux_handoff.c \
            src/ko_loader.c
 HEADERS := $(wildcard src/*.h $(TARGET_DIR)/*.h)
+ifeq ($(PROJECT),unified)
+TARGET_CFLAGS := -Isrc -DTARGET_UNIFIED=1
+else
 TARGET_CFLAGS := -Isrc -DTARGET_CONFIG_H=\"targets/$(PROJECT)/target.h\"
+endif
 
 NDK_HOST_TAG ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')-$(shell uname -m)
 NDK_ROOT ?= $(or $(ANDROID_NDK_ROOT),$(ANDROID_NDK_HOME),$(NDK_HOME),$(NDK),\
