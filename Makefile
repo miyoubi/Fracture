@@ -61,6 +61,7 @@ info:
 	@echo "COMPILER=$(COMPILER)"
 
 list-projects:
+	@echo unified
 	@find src/targets -mindepth 2 -maxdepth 2 -name target.h -printf '%h\n' | sed 's#src/targets/##' | sort
 
 clean:

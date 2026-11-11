@@ -55,6 +55,7 @@ Options:
 Examples:
   ./build.sh                                    # list targets
   ./build.sh -p sog02-58.2.C.3.127              # build only
+  ./build.sh -p unified                         # one loader, all profiles
   ./build.sh -p sog02-58.2.C.3.127 --push       # build + push
   ./build.sh --detect --push --run              # connected device; push + run
   ./build.sh -s QV7246YW54 -p sog02-58.2.C.3.127 --push
@@ -106,6 +107,10 @@ list_targets() {
     printf '  %-26s %-10s %s\n' "project" "model" "kernel"
     while IFS= read -r p; do
         [ -n "$p" ] || continue
+        if [ "$p" = unified ]; then
+            printf '  %-26s %-10s %s\n' "$p" "ALL" "4.19.157-perf+"
+            continue
+        fi
         model=$(printf '%s' "${p%%-58*}" | tr '[:lower:]' '[:upper:]')
         kernel=$(grep -m1 'TARGET_KERNEL_RELEASE' \
                 "$ROOT/src/targets/$p/target.h" 2>/dev/null | cut -d'"' -f2)
@@ -186,6 +191,11 @@ detect_project() {
     model=$(device_prop ro.product.model)
     build=$(device_prop ro.build.display.id)
     [ -n "$model" ] || die "no device found; pass --project (make list-projects)"
+    case "$model|$build" in
+        "SOG02|58.2.C.3.127"|"SO-51A|58.2.B.0.520"|"SO-52A|58.2.B.0.520"|"SOG01|58.2.C.5.10")
+            printf 'unified'
+            return ;;
+    esac
     list=$(make -s -C "$ROOT" list-projects)
     prefix=$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')
     matches=$(printf '%s\n' "$list" | grep -i "^${prefix}-" || true)
@@ -224,8 +234,9 @@ if [ -z "$PROJECT" ]; then
         die "pass -p <project> (run ./build.sh with no arguments to list targets)"
     fi
 fi
-[ -d "$ROOT/src/targets/$PROJECT" ] \
-    || die "unknown project $PROJECT (make list-projects)"
+if [ "$PROJECT" != unified ] && [ ! -d "$ROOT/src/targets/$PROJECT" ]; then
+    die "unknown project $PROJECT (make list-projects)"
+fi
 [ -d "$KERNEL_DIR" ] \
     || die "missing kernel tree: $KERNEL_DIR; run ./build.sh --setup"
 [ -d "$NDK" ] || die "missing NDK: $NDK; run ./build.sh --setup"
@@ -239,6 +250,7 @@ make_args=(PROJECT="$PROJECT")
 log "building exploit"
 make -C "$ROOT" "${make_args[@]}"
 EXPLOIT="$ROOT/build/$PROJECT/kgsl_root_su"
+LIB="$ROOT/build/$PROJECT/libfracture.so"
 [ -f "$EXPLOIT" ] || die "exploit build produced no $EXPLOIT"
 
 # 2. LKM
@@ -273,6 +285,7 @@ KO="$ROOT/build/$PROJECT/kernelsu.ko"
 # 3. push
 if [ "$PUSH" = 0 ]; then
     log "build only: $EXPLOIT"
+    [ -f "$LIB" ] && log "build only: $LIB"
     log "build only: $KO"
     log "add --push to install them on the device"
     exit 0
@@ -282,9 +295,13 @@ command -v adb >/dev/null || die "adb not found; cannot --push"
 log "pushing to /data/local/tmp"
 adb_cmd push "$EXPLOIT" /data/local/tmp/kgsl_root_su
 adb_cmd push "$KO" /data/local/tmp/kernelsu.ko
+[ -f "$LIB" ] && adb_cmd push "$LIB" /data/local/tmp/libfracture.so
 adb_cmd shell 'chmod 755 /data/local/tmp/kgsl_root_su /data/local/tmp/kernelsu.ko'
+[ -f "$LIB" ] && adb_cmd shell 'chmod 755 /data/local/tmp/libfracture.so'
 
-for pair in "kgsl_root_su:$EXPLOIT" "kernelsu.ko:$KO"; do
+files=("kgsl_root_su:$EXPLOIT" "kernelsu.ko:$KO")
+[ -f "$LIB" ] && files+=("libfracture.so:$LIB")
+for pair in "${files[@]}"; do
     name=${pair%%:*}
     path=${pair#*:}
     host_md5=$(md5sum "$path" | cut -d' ' -f1)
