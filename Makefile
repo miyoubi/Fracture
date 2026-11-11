@@ -10,6 +10,7 @@ $(error unknown PROJECT=$(PROJECT), missing $(TARGET_HEADER))
 endif
 
 TARGET := $(OUTDIR)/kgsl_root_su
+LIB := $(OUTDIR)/libfracture.so
 SOURCES := src/main.c src/target_profile.c \
            src/selinux_handoff.c \
            src/ko_loader.c
@@ -28,15 +29,24 @@ LDFLAGS ?= -pie -pthread -ldl
 
 .PHONY: all clean info list-projects
 
-all: $(TARGET)
+all: $(TARGET) $(LIB)
 
 $(TARGET): $(SOURCES) $(HEADERS)
 	mkdir -p $(OUTDIR)
 	$(COMPILER) $(CFLAGS) $(TARGET_CFLAGS) $(SOURCES) $(LDFLAGS) -o $@
 
+$(LIB): $(SOURCES) $(HEADERS) src/preload.c
+	mkdir -p $(OUTDIR)
+	$(COMPILER) -O2 -std=gnu11 -Wall -Wextra -Werror \
+		-Wno-unused-parameter -Wno-unused-variable \
+		-fPIC -shared -Dmain=kgsl_root_su_main \
+		$(TARGET_CFLAGS) $(SOURCES) src/preload.c \
+		-pthread -ldl -o $@
+
 info:
 	@echo "PROJECT=$(PROJECT)"
 	@echo "TARGET=$(TARGET)"
+	@echo "LIB=$(LIB)"
 	@echo "COMPILER=$(COMPILER)"
 
 list-projects:
