@@ -2862,6 +2862,14 @@ int main(int argc, char **argv) {
         snprintf(next, sizeof(next), "%d", retry + 1);
         fprintf(stderr, "[*] permissive missed; restarting the exploit"
                         " (attempt %d)\n", retry + 1);
+        if (getenv("FRACTURE_PRELOAD")) {
+            fprintf(stderr, "[-] not re-exec'ing /proc/self/exe under the"
+                            " loader (that would re-run the preloaded sh);"
+                            " let the app retry\n");
+            kill_children_except(-1);
+            abandon_round(&fd, &ib_id, &ib_vma, &dump_id, &dump_vma);
+            return 1;
+        }
         kill_children_except(-1);
         kill(root_child.pid, SIGKILL);
         while (waitpid(root_child.pid, NULL, 0) < 0 && errno == EINTR) {}
