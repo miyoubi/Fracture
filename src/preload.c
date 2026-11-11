@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <unistd.h>
 
 /*
@@ -10,5 +11,6 @@ extern int kgsl_root_su_main(int argc, char **argv);
 __attribute__((constructor))
 static void kgsl_root_su_preload(void) {
     char *argv[] = { "kgsl_root_su", 0 };
+    setenv("FRACTURE_PRELOAD", "1", 1);
     _exit(kgsl_root_su_main(1, argv));
 }
