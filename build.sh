@@ -42,7 +42,7 @@ Options:
   -s, --serial SERIAL  adb serial (or ANDROID_SERIAL)
   -P, --push           push both binaries to /data/local/tmp (off by default)
   -r, --run            push and run the exploit (implies --push)
-  -a, --app            build the Fracture loader APK (use -p unified)
+  -a, --app            build the Fracture APK from build/unified assets
       --setup          download the NDK and clone the kernel if missing
       --force          with --setup, delete and re-fetch both
       --pull           fetch KernelSU before building
@@ -290,6 +290,14 @@ APK=""
 if [ "$APP" = 1 ]; then
     log "building the Fracture app"
     command -v gradle >/dev/null || die "gradle not found (needed for --app)"
+    APP_ASSETS="$ROOT/app/app/src/main/assets/exploit"
+    mkdir -p "$APP_ASSETS"
+    for f in libfracture.so kernelsu.ko; do
+        [ -f "$ROOT/build/unified/$f" ] \
+            || die "missing build/unified/$f; build the unified loader first (./build.sh -p unified)"
+        cp "$ROOT/build/unified/$f" "$APP_ASSETS/$f"
+    done
+    log "using exploit assets from build/unified"
     ( cd "$ROOT/app" && gradle --no-daemon assembleDebug )
     APK="$ROOT/app/app/build/outputs/apk/debug/app-debug.apk"
     [ -f "$APK" ] || die "app build produced no $APK"
