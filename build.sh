@@ -324,27 +324,28 @@ if [ "$PUSH" = 0 ]; then
 fi
 
 command -v adb >/dev/null || die "adb not found; cannot --push"
-log "pushing to /data/local/tmp"
-adb_cmd push "$EXPLOIT" /data/local/tmp/kgsl_root_su
-adb_cmd push "$KO" /data/local/tmp/kernelsu.ko
-[ -f "$LIB" ] && adb_cmd push "$LIB" /data/local/tmp/libfracture.so
-adb_cmd shell 'chmod 755 /data/local/tmp/kgsl_root_su /data/local/tmp/kernelsu.ko'
-[ -f "$LIB" ] && adb_cmd shell 'chmod 755 /data/local/tmp/libfracture.so'
-
-files=("kgsl_root_su:$EXPLOIT" "kernelsu.ko:$KO")
-[ -f "$LIB" ] && files+=("libfracture.so:$LIB")
-for pair in "${files[@]}"; do
-    name=${pair%%:*}
-    path=${pair#*:}
-    host_md5=$(md5sum "$path" | cut -d' ' -f1)
-    dev_md5=$(adb_cmd shell md5sum "/data/local/tmp/$name" | tr -d '\r' | cut -d' ' -f1)
-    [ "$host_md5" = "$dev_md5" ] || die "md5 mismatch for $name"
-done
-log "pushed and verified: /data/local/tmp/kgsl_root_su, /data/local/tmp/kernelsu.ko"
 
 if [ "$APP" = 1 ]; then
     log "installing the Fracture app"
     adb_cmd install -r "$APK" || die "app install failed"
+else
+    log "pushing to /data/local/tmp"
+    adb_cmd push "$EXPLOIT" /data/local/tmp/kgsl_root_su
+    adb_cmd push "$KO" /data/local/tmp/kernelsu.ko
+    [ -f "$LIB" ] && adb_cmd push "$LIB" /data/local/tmp/libfracture.so
+    adb_cmd shell 'chmod 755 /data/local/tmp/kgsl_root_su /data/local/tmp/kernelsu.ko'
+    [ -f "$LIB" ] && adb_cmd shell 'chmod 755 /data/local/tmp/libfracture.so'
+
+    files=("kgsl_root_su:$EXPLOIT" "kernelsu.ko:$KO")
+    [ -f "$LIB" ] && files+=("libfracture.so:$LIB")
+    for pair in "${files[@]}"; do
+        name=${pair%%:*}
+        path=${pair#*:}
+        host_md5=$(md5sum "$path" | cut -d' ' -f1)
+        dev_md5=$(adb_cmd shell md5sum "/data/local/tmp/$name" | tr -d '\r' | cut -d' ' -f1)
+        [ "$host_md5" = "$dev_md5" ] || die "md5 mismatch for $name"
+    done
+    log "pushed and verified: /data/local/tmp/kgsl_root_su, /data/local/tmp/kernelsu.ko"
 fi
 
 if [ "$RUN" = 1 ]; then
