@@ -16,6 +16,7 @@ SERIAL="${ANDROID_SERIAL:-}"
 PUSH=0
 RUN=0
 APP=0
+APP_VARIANT="release"
 PULL=0
 CONFIG=""
 SYMVERS=""
@@ -42,7 +43,8 @@ Options:
   -s, --serial SERIAL  adb serial (or ANDROID_SERIAL)
   -P, --push           push both binaries to /data/local/tmp (off by default)
   -r, --run            push and run the exploit (implies --push)
-  -a, --app            build the Fracture APK from build/unified assets
+  -a, --app            build the Fracture APK (release) from build/unified assets
+      --app-debug      build the Fracture APK (debug) from build/unified assets
       --setup          download the NDK and clone the kernel if missing
       --force          with --setup, delete and re-fetch both
       --pull           fetch KernelSU before building
@@ -58,7 +60,8 @@ Examples:
   ./build.sh                                    # list targets
   ./build.sh -p sog02-58.2.C.3.127              # build only
   ./build.sh -p unified                         # one loader, all profiles
-  ./build.sh -p unified --app --push            # loader + Fracture app
+  ./build.sh -p unified --app --push            # loader + Fracture app (release)
+  ./build.sh -p unified --app-debug --push      # loader + Fracture app (debug)
   ./build.sh -p sog02-58.2.C.3.127 --push       # build + push
   ./build.sh --detect --push --run              # connected device; push + run
   ./build.sh -s QV7246YW54 -p sog02-58.2.C.3.127 --push
@@ -77,7 +80,8 @@ while [ $# -gt 0 ]; do
         -n|--no-push)  PUSH=0 ;;
         -P|--push)     PUSH=1 ;;
         -r|--run)      RUN=1 ;;
-        -a|--app)      APP=1 ;;
+        -a|--app)      APP=1; APP_VARIANT="release" ;;
+        --app-debug)   APP=1; APP_VARIANT="debug" ;;
         --setup)       SETUP=1 ;;
         --force)       FORCE=1; SETUP=1 ;;
         --pull)        PULL=1 ;;
@@ -288,7 +292,7 @@ KO="$ROOT/build/$PROJECT/kernelsu.ko"
 
 APK=""
 if [ "$APP" = 1 ]; then
-    log "building the Fracture app"
+    log "building the Fracture app ($APP_VARIANT)"
     command -v gradle >/dev/null || die "gradle not found (needed for --app)"
     APP_ASSETS="$ROOT/app/app/src/main/assets/exploit"
     mkdir -p "$APP_ASSETS"
@@ -298,8 +302,13 @@ if [ "$APP" = 1 ]; then
         cp "$ROOT/build/unified/$f" "$APP_ASSETS/$f"
     done
     log "using exploit assets from build/unified"
-    ( cd "$ROOT/app" && gradle --no-daemon assembleDebug )
-    APK="$ROOT/app/app/build/outputs/apk/debug/app-debug.apk"
+    if [ "$APP_VARIANT" = "release" ]; then
+        ( cd "$ROOT/app" && gradle --no-daemon assembleRelease )
+        APK="$ROOT/app/app/build/outputs/apk/release/app-release.apk"
+    else
+        ( cd "$ROOT/app" && gradle --no-daemon assembleDebug )
+        APK="$ROOT/app/app/build/outputs/apk/debug/app-debug.apk"
+    fi
     [ -f "$APK" ] || die "app build produced no $APK"
     log "built $APK"
 fi
