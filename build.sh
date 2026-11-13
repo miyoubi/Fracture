@@ -149,6 +149,11 @@ list_targets() {
     else
         printf '  kernel: missing (%s) - run ./build.sh --setup\n' "$KERNEL_DIR"
     fi
+    if [ -d "$ROOT/KernelSU" ]; then
+        printf '  KernelSU: present (%s)\n' "$ROOT/KernelSU"
+    else
+        printf '  KernelSU: missing (%s) - will be cloned automatically\n' "$ROOT/KernelSU"
+    fi
 }
 
 setup_components() {
@@ -248,6 +253,12 @@ fi
 [ -d "$KERNEL_DIR" ] \
     || die "missing kernel tree: $KERNEL_DIR; run ./build.sh --setup"
 [ -d "$NDK" ] || die "missing NDK: $NDK; run ./build.sh --setup"
+if [ ! -d "$ROOT/KernelSU" ]; then
+    command -v git >/dev/null 2>&1 || die "git is required to fetch KernelSU"
+    log "cloning KernelSU from GitHub"
+    git clone https://github.com/backslashxx/KernelSU "$ROOT/KernelSU" \
+        || die "KernelSU clone failed"
+fi
 
 log "project: $PROJECT"
 [ -n "$SERIAL" ] && log "device:  $SERIAL"
