@@ -74,8 +74,6 @@ public final class MainActivity extends AppCompatActivity {
     private MaterialButton btnShizuku;
     private View cardShizuku;
     private com.google.android.material.card.MaterialCardView cardOutput;
-    private com.google.android.material.checkbox.MaterialCheckBox cbAutoScroll;
-    private com.google.android.material.checkbox.MaterialCheckBox cbTimestamps;
     private boolean shizukuReady;
     private boolean ksuManager;
     private String ksuManagerPkg;
@@ -86,9 +84,6 @@ public final class MainActivity extends AppCompatActivity {
     private boolean ksuReceipt;
     private boolean managerLaunched;
     private boolean running;
-    private boolean autoScroll = true;
-    private boolean showTimestamps = false;
-    private String selinuxMode;
 
     private String appliedAccent;
 
@@ -137,26 +132,6 @@ public final class MainActivity extends AppCompatActivity {
         btnShizuku = findViewById(R.id.btnShizuku);
         cardShizuku = findViewById(R.id.cardShizuku);
         cardOutput = findViewById(R.id.cardOutput);
-        cbAutoScroll = findViewById(R.id.cbAutoScroll);
-        cbTimestamps = findViewById(R.id.cbTimestamps);
-        autoScroll = prefs.getBoolean("output_auto_scroll", true);
-        showTimestamps = prefs.getBoolean("output_timestamps", false);
-        if (cbAutoScroll != null) {
-            cbAutoScroll.setChecked(autoScroll);
-            cbAutoScroll.setOnCheckedChangeListener((b, c) -> {
-                autoScroll = c;
-                prefs.edit().putBoolean("output_auto_scroll", c).apply();
-                if (autoScroll) scrollLogToBottom();
-            });
-        }
-        if (cbTimestamps != null) {
-            cbTimestamps.setChecked(showTimestamps);
-            cbTimestamps.setOnCheckedChangeListener((b, c) -> {
-                showTimestamps = c;
-                prefs.edit().putBoolean("output_timestamps", c).apply();
-                rebuildLogView();
-            });
-        }
         applyPersonalization();
 
         View.OnClickListener ksuActiveClick = v -> {
@@ -265,7 +240,6 @@ public final class MainActivity extends AppCompatActivity {
         chipStatus.setTextColor(fg);
         chipStatus.setChipIconVisible(false);
         chipStatus.setCheckedIconVisible(false);
-        updatePreRunChecks();
     }
 
     private void setRow(int rowId, int labelId, String value) {
@@ -320,91 +294,10 @@ public final class MainActivity extends AppCompatActivity {
             tvShizuku.setText(R.string.shizuku_ready);
             btnShizuku.setText(R.string.refresh);
         }
-        updatePreRunChecks();
         checkKernelSu();
         setBusy(false);
     }
 
-
-    private boolean hasAsset(String name) {
-        try (java.io.InputStream in = getAssets().open(name)) {
-            return in != null;
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private String readSelinuxMode() {
-        try (BufferedReader reader = new BufferedReader(
-                new FileReader("/sys/fs/selinux/enforce"))) {
-            String line = reader.readLine();
-            if (line == null) return null;
-            line = line.trim();
-            if ("1".equals(line)) return getString(R.string.selinux_enforcing);
-            if ("0".equals(line)) return getString(R.string.selinux_permissive);
-        } catch (Throwable ignored) {
-        }
-        try {
-            java.lang.Process p = new java.lang.ProcessBuilder("getenforce")
-                    .redirectErrorStream(true).start();
-            try (BufferedReader r = new BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream()))) {
-                String line = r.readLine();
-                p.waitFor();
-                if (line != null) {
-                    String v = line.trim();
-                    if ("Enforcing".equalsIgnoreCase(v)) return getString(R.string.selinux_enforcing);
-                    if ("Permissive".equalsIgnoreCase(v)) return getString(R.string.selinux_permissive);
-                    if ("Disabled".equalsIgnoreCase(v)) return getString(R.string.selinux_disabled);
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return null;
-    }
-
-    private void updatePreRunChecks() {
-        selinuxMode = readSelinuxMode();
-        String sel = selinuxMode != null ? selinuxMode : getString(R.string.selinux_unknown);
-        setRow(R.id.rowSelinux, R.string.selinux, sel);
-
-        String shizukuInfo = shizukuReady
-                ? getString(R.string.shizuku_uid_value, 2000)
-                : getString(R.string.shizuku_not_running);
-        setRow(R.id.rowShizukuUid, R.string.shizuku_uid, shizukuInfo);
-
-        boolean exploitAsset = hasAsset("exploit/libfracture.so");
-        boolean moduleAsset = hasAsset("exploit/kernelsu.ko");
-        boolean ksuEnabled = prefs == null || prefs.getBoolean("ksu", true);
-        String payload;
-        boolean payloadOk = false;
-        if (device == null || device.profile == null) {
-            payload = getString(R.string.payload_missing_profile);
-        } else if (!exploitAsset) {
-            payload = getString(R.string.payload_missing_exploit);
-        } else if (ksuEnabled && !moduleAsset) {
-            payload = getString(R.string.payload_missing_module);
-        } else {
-            payload = getString(R.string.payload_ready, device.profile);
-            payloadOk = true;
-        }
-        setRow(R.id.rowPayload, R.string.payload, payload);
-
-        int readyRes;
-        if (ksuModule) {
-            readyRes = R.string.ready_ksu_live;
-        } else if (running) {
-            readyRes = R.string.ready_running;
-        } else if (!payloadOk || (device != null && !device.supported)) {
-            readyRes = (device == null || device.profile == null) ? R.string.ready_unsupported : R.string.ready_no_payload;
-            if (device != null && !device.supported) readyRes = R.string.ready_unsupported;
-        } else if (!shizukuReady) {
-            readyRes = R.string.ready_need_shizuku;
-        } else {
-            readyRes = R.string.ready_ok;
-        }
-        setRow(R.id.rowReady, R.string.ready_status, getString(readyRes));
-    }
 
     private void checkKernelSu() {
         checkKernelSu(false);
@@ -455,7 +348,6 @@ public final class MainActivity extends AppCompatActivity {
         ksuShellActive = false;
         ksuModule = ksuNativeActive || ksuReceipt;
         updateKernelSuUi();
-        updatePreRunChecks();
 
         // If native probe already confirms, no need for shell probing.
         if (ksuNativeActive) {
@@ -483,7 +375,6 @@ public final class MainActivity extends AppCompatActivity {
                 ksuReceipt = hasInstallReceiptForCurrentBoot();
                 ksuModule = ksuNativeActive || ksuShellActive || ksuReceipt;
                 updateKernelSuUi();
-                updatePreRunChecks();
                 if (openManagerIfLive && ksuModule) {
                     maybeOpenManager();
                 }
@@ -691,7 +582,6 @@ public final class MainActivity extends AppCompatActivity {
         if (device == null || !device.supported || !shizukuReady) return;
         if (ksuModule) {
             appendLog("KernelSU is already live; not running the exploit again");
-            updatePreRunChecks();
             return;
         }
         managerLaunched = false;
@@ -726,7 +616,6 @@ public final class MainActivity extends AppCompatActivity {
                                     : "— exit " + code + " —");
                             setBusy(false);
                             checkKernelSu(true);
-                            updatePreRunChecks();
                         });
                     }
                 });
@@ -769,16 +658,10 @@ public final class MainActivity extends AppCompatActivity {
         } else {
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
-        updatePreRunChecks();
     }
 
     private boolean isDetailedOutput() {
         return prefs != null && prefs.getBoolean("detailed_output", false);
-    }
-
-    private void scrollLogToBottom() {
-        if (!autoScroll || logScroll == null) return;
-        logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
     }
 
     private void updateLogEmptyState(String text) {
@@ -787,43 +670,38 @@ public final class MainActivity extends AppCompatActivity {
         logEmpty.setVisibility(empty ? View.VISIBLE : View.GONE);
     }
 
-    private String currentLogText() {
-        return isDetailedOutput()
-                ? LogStore.getDetailed(showTimestamps)
-                : LogStore.getSimple(showTimestamps);
-    }
-
     private void rebuildLogView() {
         if (logView == null) return;
-        String text = currentLogText();
+        String text = isDetailedOutput() ? LogStore.getDetailed() : LogStore.getSimple();
         logView.setText(text);
         updateLogEmptyState(text);
-        scrollLogToBottom();
+        if (logScroll != null) {
+            logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+        }
     }
 
     private void appendLog(String line) {
         LogStore.append(line);
         if (logView == null) return;
-        String display = showTimestamps
-                ? "[" + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(new java.util.Date()) + "] " + line
-                : line;
         if (isDetailedOutput()) {
-            String text = currentLogText();
+            String text = LogStore.getDetailed();
             logView.setText(text);
             updateLogEmptyState(text);
         } else if (LogStore.isSimpleLine(line)) {
             CharSequence cur = logView.getText();
             String newText;
             if (cur == null || cur.length() == 0) {
-                newText = display + "\n";
+                newText = line + "\n";
             } else {
-                newText = cur.toString() + display + "\n";
+                newText = cur.toString() + line + "\n";
             }
             logView.setText(newText);
             updateLogEmptyState(newText);
         } else {
             updateLogEmptyState(logView.getText().toString());
         }
-        scrollLogToBottom();
+        if (logScroll != null) {
+            logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+        }
     }
 }
