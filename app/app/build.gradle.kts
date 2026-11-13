@@ -1,5 +1,3 @@
-import java.io.ByteArrayOutputStream
-
 plugins {
     id("com.android.application")
 }
@@ -7,14 +5,13 @@ plugins {
 val repoRoot: File = rootProject.projectDir.parentFile
 val gitSha: String = run {
     try {
-        val out = ByteArrayOutputStream()
-        exec {
-            commandLine("git", "rev-parse", "--short=7", "HEAD")
-            workingDir = repoRoot
-            standardOutput = out
-            isIgnoreExitValue = true
-        }
-        out.toString().trim().ifEmpty { "unknown" }
+        val proc = ProcessBuilder("git", "rev-parse", "--short=7", "HEAD")
+            .directory(repoRoot)
+            .redirectErrorStream(true)
+            .start()
+        val out = proc.inputStream.bufferedReader().readText().trim()
+        proc.waitFor()
+        if (proc.exitValue() == 0 && out.isNotEmpty()) out else "unknown"
     } catch (_: Exception) {
         "unknown"
     }
