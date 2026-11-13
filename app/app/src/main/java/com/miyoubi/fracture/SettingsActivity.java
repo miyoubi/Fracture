@@ -62,27 +62,26 @@ public final class SettingsActivity extends AppCompatActivity {
         AutoCompleteTextView dropdownAccentColor = findViewById(R.id.dropdownAccentColor);
         if (dropdownAccentColor != null) {
             String[] accentValues = {
-                    ThemeHelper.ACCENT_MONET,
                     ThemeHelper.ACCENT_PURPLE,
                     ThemeHelper.ACCENT_BLUE,
                     ThemeHelper.ACCENT_GREEN,
                     ThemeHelper.ACCENT_RED,
                     ThemeHelper.ACCENT_ORANGE,
                     ThemeHelper.ACCENT_PINK,
-                    ThemeHelper.ACCENT_TEAL
+                    ThemeHelper.ACCENT_TEAL,
+                    ThemeHelper.ACCENT_MONET
             };
             String[] accentLabels = {
-                    getString(R.string.accent_monet),
                     getString(R.string.accent_purple),
                     getString(R.string.accent_blue),
                     getString(R.string.accent_green),
                     getString(R.string.accent_red),
                     getString(R.string.accent_orange),
                     getString(R.string.accent_pink),
-                    getString(R.string.accent_teal)
+                    getString(R.string.accent_teal),
+                    getString(R.string.accent_monet)
             };
-            ArrayAdapter<String> accentAdapter = new ArrayAdapter<>(this,
-                    android.R.layout.simple_list_item_1, accentLabels);
+            AccentColorAdapter accentAdapter = new AccentColorAdapter(this, accentLabels, accentValues);
             dropdownAccentColor.setAdapter(accentAdapter);
             String accent = ThemeHelper.getAccent(this);
             int accentIndex = 0;
@@ -94,7 +93,7 @@ public final class SettingsActivity extends AppCompatActivity {
             }
             dropdownAccentColor.setText(accentLabels[accentIndex], false);
             dropdownAccentColor.setOnItemClickListener((parent, view, position, id) -> {
-                String selected = accentValues[position];
+                String selected = accentAdapter.valueAt(position);
                 if (!selected.equals(ThemeHelper.getAccent(this))) {
                     prefs.edit().putString(ThemeHelper.PREF_ACCENT, selected).apply();
                     recreate();
