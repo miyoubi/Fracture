@@ -54,6 +54,37 @@
     <string name="copy">Copy</string>
     <string name="copied">Copied</string>
     <string name="clear">Clear</string>
+    <string name="output_auto_scroll">Auto-scroll</string>
+    <string name="output_timestamps">Timestamps</string>
+
+    <string name="checks_title">Pre-run checks</string>
+    <string name="selinux">SELinux</string>
+    <string name="selinux_unknown">Unknown</string>
+    <string name="selinux_enforcing">Enforcing</string>
+    <string name="selinux_permissive">Permissive</string>
+    <string name="selinux_disabled">Disabled</string>
+    <string name="shizuku_uid">Shizuku</string>
+    <string name="shizuku_uid_value">uid %1$d (shell)</string>
+    <string name="payload">Payload</string>
+    <string name="payload_ready">Ready (%1$s)</string>
+    <string name="payload_missing_exploit">Missing exploit asset</string>
+    <string name="payload_missing_profile">No profile for this build</string>
+    <string name="payload_missing_module">Missing kernelsu.ko</string>
+    <string name="ready_status">Status</string>
+    <string name="ready_ok">Ready to run</string>
+    <string name="ready_running">Running…</string>
+    <string name="ready_ksu_live">KernelSU already active</string>
+    <string name="ready_need_shizuku">Waiting for Shizuku access</string>
+    <string name="ready_unsupported">Unsupported device/build</string>
+    <string name="ready_no_payload">Payload not available</string>
+
+    <string name="ksu_active_detail">Active%1$s%2$s</string>
+    <string name="ksu_detail_native"> • native</string>
+    <string name="ksu_detail_shell"> • via su</string>
+    <string name="ksu_detail_receipt"> • verified this boot</string>
+    <string name="ksu_manager_detail">Manager: %1$s%2$s</string>
+    <string name="ksu_manager_version"> v%1$s</string>
+    <string name="ksu_manager_missing_short">Manager not installed</string>
     <string name="send_logs">Send logs</string>
     <string name="send_logs_desc">Share diagnostic logs and device info</string>
     <string name="detailed_output">Detailed output</string>
