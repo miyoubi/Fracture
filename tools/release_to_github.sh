@@ -43,6 +43,7 @@ Options:
       --no-build        Do not build; upload existing artifacts
       --target REF      Target commit/branch for a new tag (default: HEAD)
       --repo OWNER/REPO Override repository (default: miyoubi/CVE-2023-33107)
+      --fracture        Shortcut for --repo miyoubi/Fracture
   -h, --help            Show this help
 
 Artifacts uploaded (when present): app/app/build/outputs/apk/release/app-release.apk
@@ -59,6 +60,7 @@ while [ $# -gt 0 ]; do
         --no-build)      DO_BUILD=0 ;;
         --target)        [ $# -ge 2 ] || die "$1 needs a value"; TARGET_COMMITISH=$2; shift ;;
         --repo)          [ $# -ge 2 ] || die "$1 needs a value"; REPO_SLUG=$2; shift ;;
+        --fracture)      REPO_SLUG="miyoubi/Fracture" ;;
         -h|--help)       usage; exit 0 ;;
         -*)              die "unknown option: $1 (try --help)" ;;
         *)               if [ -z "$TAG" ]; then TAG=$1; else die "unexpected argument: $1"; fi ;;
