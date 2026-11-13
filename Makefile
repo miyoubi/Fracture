@@ -1,5 +1,5 @@
 API ?= 30
-PROJECT ?= sog02-58.2.C.3.127
+PROJECT ?= unified
 OUTDIR ?= build/$(PROJECT)
 
 TARGET_DIR := src/targets/$(PROJECT)

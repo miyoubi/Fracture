@@ -38,7 +38,7 @@ usage() {
     cat <<'EOF'
 
 Options:
-  -p, --project NAME   profile from `make list-projects` (else use --detect)
+  -p, --project NAME   profile from `make list-projects` (default: unified)
   -d, --detect         use the connected device's model/build
   -s, --serial SERIAL  adb serial (or ANDROID_SERIAL)
   -P, --push           push both binaries to /data/local/tmp (off by default)
