@@ -283,8 +283,24 @@ if [ -z "$CONFIG" ] && [ ! -f "$KERNEL_DIR/.config" ] && command -v adb >/dev/nu
 fi
 [ -f "$KERNEL_DIR/.config" ] || die \
     "no $KERNEL_DIR/.config; pass --config or extract it with scripts/extract-ikconfig"
-if [ -z "$SYMVERS" ] && [ ! -s "$KERNEL_DIR/Module.symvers" ] && [ -z "$VMLINUX" ]; then
-    die "no $KERNEL_DIR/Module.symvers; pass --symvers or generate it with --vmlinux"
+
+# Resolve Module.symvers / vmlinux for LKM symbol CRCs
+if [ -z "$SYMVERS" ] && [ -s "$KERNEL_DIR/Module.symvers" ]; then
+    SYMVERS="$KERNEL_DIR/Module.symvers"
+elif [ -z "$SYMVERS" ] && [ -s "$ROOT/Module.symvers" ]; then
+    SYMVERS="$ROOT/Module.symvers"
+fi
+if [ -z "$VMLINUX" ]; then
+    for cand in "$ROOT/vmlinux" "$ROOT/vmlinux.elf" "$KERNEL_DIR/vmlinux" "$KERNEL_DIR/vmlinux.elf"; do
+        if [ -s "$cand" ]; then VMLINUX="$cand"; break; fi
+    done
+fi
+if [ -z "$SYMVERS" ] || [ ! -s "$SYMVERS" ]; then
+    if [ -z "$VMLINUX" ]; then
+        die "no Module.symvers found (checked $KERNEL_DIR/Module.symvers, $ROOT/Module.symvers). Provide --symvers PATH, or place a vmlinux/vmlinux.elf in $ROOT (or pass --vmlinux PATH) to generate it (needs gen_symvers.py + vmlinux-to-elf; see README)"
+    fi
+    # Let the LKM builder generate Module.symvers from vmlinux
+    SYMVERS=""
 fi
 
 lkm_args=()
