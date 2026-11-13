@@ -12,3 +12,7 @@ post.md
 
 # local tooling state (agent tasks, session data)
 .pi/
+
+# staged exploit assets
+app/app/src/main/assets/exploit/kernelsu.ko
+app/app/src/main/assets/exploit/libfracture.so

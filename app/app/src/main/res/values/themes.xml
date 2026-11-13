@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Fracture" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="colorPrimary">#5B4D8A</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#D0C4EA</item>
+        <item name="colorOnPrimaryContainer">#1E1242</item>
+    </style>
+
+    <style name="Theme.Fracture.NoActionBar" parent="Theme.Fracture" />
+
+    <style name="TextAppearance.Fracture.ToolbarTitle" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="ShapeAppearance.Fracture.Card" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">24dp</item>
+    </style>
+
+    <style name="Widget.Fracture.Card" parent="Widget.Material3.CardView.Filled">
+        <item name="shapeAppearance">@style/ShapeAppearance.Fracture.Card</item>
+        <item name="cardElevation">0dp</item>
+    </style>
+</resources>
