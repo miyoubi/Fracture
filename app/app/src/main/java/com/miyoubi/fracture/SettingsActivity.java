@@ -103,8 +103,9 @@ public final class SettingsActivity extends AppCompatActivity {
                 if (!selected.equals(appliedAccent)) {
                     appliedAccent = selected;
                     dropdownAccentColor.dismissDropDown();
+                    dropdownAccentColor.clearFocus();
                     prefs.edit().putString(ThemeHelper.PREF_ACCENT, selected).apply();
-                    recreate();
+                    dropdownAccentColor.post(this::recreate);
                 }
             });
         }
