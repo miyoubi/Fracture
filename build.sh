@@ -71,6 +71,11 @@ EOF
 
 ARG_COUNT=$#
 [ "$ARG_COUNT" -eq 0 ] && LIST_ONLY=1
+APP_ONLY=0
+if [ "$ARG_COUNT" -eq 1 ] && { [ "$1" = "-a" ] || [ "$1" = "--app" ] || [ "$1" = "--app-debug" ]; }; then
+    APP_ONLY=1
+    LIST_ONLY=0
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -99,6 +104,10 @@ done
 
 if [ "$RUN" = 1 ]; then
     PUSH=1
+fi
+if [ "$APP" = 1 ] && [ "$RUN" = 0 ]; then
+    # App builds default to just producing the APK unless explicitly pushed/run.
+    :
 fi
 
 adb_cmd() {
@@ -253,72 +262,81 @@ fi
 if [ "$PROJECT" != unified ] && [ ! -d "$ROOT/src/targets/$PROJECT" ]; then
     die "unknown project $PROJECT (make list-projects)"
 fi
-[ -d "$KERNEL_DIR" ] \
-    || die "missing kernel tree: $KERNEL_DIR; run ./build.sh --setup"
-[ -d "$NDK" ] || die "missing NDK: $NDK; run ./build.sh --setup"
-if [ ! -d "$ROOT/KernelSU" ]; then
-    command -v git >/dev/null 2>&1 || die "git is required to fetch KernelSU"
-    log "cloning KernelSU from GitHub"
-    git clone https://github.com/backslashxx/KernelSU "$ROOT/KernelSU" \
-        || die "KernelSU clone failed"
-fi
 
-log "project: $PROJECT"
-[ -n "$SERIAL" ] && log "device:  $SERIAL"
+EXPLOIT=""
+LIB=""
+KO=""
 
-# 1. exploit
-make_args=(PROJECT="$PROJECT")
-[ -d "$NDK" ] && make_args+=(NDK_ROOT="$NDK")
-log "building exploit"
-make -C "$ROOT" "${make_args[@]}"
-EXPLOIT="$ROOT/build/$PROJECT/kgsl_root_su"
-LIB="$ROOT/build/$PROJECT/libfracture.so"
-[ -f "$EXPLOIT" ] || die "exploit build produced no $EXPLOIT"
-
-# 2. LKM
-if [ -z "$CONFIG" ] && [ ! -f "$KERNEL_DIR/.config" ] && command -v adb >/dev/null; then
-    if [ -n "$(device_prop ro.product.model)" ]; then
-        log "pulling the device kernel config"
-        adb_cmd exec-out sh -c 'zcat /proc/config.gz' \
-            > "$KERNEL_DIR/.config" 2>/dev/null || true
-        [ -s "$KERNEL_DIR/.config" ] || rm -f "$KERNEL_DIR/.config"
+if [ "$APP_ONLY" = 0 ]; then
+    [ -d "$KERNEL_DIR" ] \
+        || die "missing kernel tree: $KERNEL_DIR; run ./build.sh --setup"
+    [ -d "$NDK" ] || die "missing NDK: $NDK; run ./build.sh --setup"
+    if [ ! -d "$ROOT/KernelSU" ]; then
+        command -v git >/dev/null 2>&1 || die "git is required to fetch KernelSU"
+        log "cloning KernelSU from GitHub"
+        git clone https://github.com/backslashxx/KernelSU "$ROOT/KernelSU" \
+            || die "KernelSU clone failed"
     fi
-fi
-[ -f "$KERNEL_DIR/.config" ] || die \
-    "no $KERNEL_DIR/.config; pass --config or extract it with scripts/extract-ikconfig"
 
-# Resolve Module.symvers / vmlinux for LKM symbol CRCs
-if [ -z "$SYMVERS" ] && [ -s "$KERNEL_DIR/Module.symvers" ]; then
-    SYMVERS="$KERNEL_DIR/Module.symvers"
-elif [ -z "$SYMVERS" ] && [ -s "$ROOT/Module.symvers" ]; then
-    SYMVERS="$ROOT/Module.symvers"
-fi
-if [ -z "$VMLINUX" ]; then
-    for cand in "$ROOT/vmlinux" "$ROOT/vmlinux.elf" "$KERNEL_DIR/vmlinux" "$KERNEL_DIR/vmlinux.elf"; do
-        if [ -s "$cand" ]; then VMLINUX="$cand"; break; fi
-    done
-fi
-if [ -z "$SYMVERS" ] || [ ! -s "$SYMVERS" ]; then
+    log "project: $PROJECT"
+    [ -n "$SERIAL" ] && log "device:  $SERIAL"
+
+    # 1. exploit
+    make_args=(PROJECT="$PROJECT")
+    [ -d "$NDK" ] && make_args+=(NDK_ROOT="$NDK")
+    log "building exploit"
+    make -C "$ROOT" "${make_args[@]}"
+    EXPLOIT="$ROOT/build/$PROJECT/kgsl_root_su"
+    LIB="$ROOT/build/$PROJECT/libfracture.so"
+    [ -f "$EXPLOIT" ] || die "exploit build produced no $EXPLOIT"
+
+    # 2. LKM
+    if [ -z "$CONFIG" ] && [ ! -f "$KERNEL_DIR/.config" ] && command -v adb >/dev/null; then
+        if [ -n "$(device_prop ro.product.model)" ]; then
+            log "pulling the device kernel config"
+            adb_cmd exec-out sh -c 'zcat /proc/config.gz' \
+                > "$KERNEL_DIR/.config" 2>/dev/null || true
+            [ -s "$KERNEL_DIR/.config" ] || rm -f "$KERNEL_DIR/.config"
+        fi
+    fi
+    [ -f "$KERNEL_DIR/.config" ] || die \
+        "no $KERNEL_DIR/.config; pass --config or extract it with scripts/extract-ikconfig"
+
+    # Resolve Module.symvers / vmlinux for LKM symbol CRCs
+    if [ -z "$SYMVERS" ] && [ -s "$KERNEL_DIR/Module.symvers" ]; then
+        SYMVERS="$KERNEL_DIR/Module.symvers"
+    elif [ -z "$SYMVERS" ] && [ -s "$ROOT/Module.symvers" ]; then
+        SYMVERS="$ROOT/Module.symvers"
+    fi
     if [ -z "$VMLINUX" ]; then
-        die "no Module.symvers found (checked $KERNEL_DIR/Module.symvers, $ROOT/Module.symvers). Provide --symvers PATH, or place a vmlinux/vmlinux.elf in $ROOT (or pass --vmlinux PATH) to generate it (needs gen_symvers.py + vmlinux-to-elf; see README)"
+        for cand in "$ROOT/vmlinux" "$ROOT/vmlinux.elf" "$KERNEL_DIR/vmlinux" "$KERNEL_DIR/vmlinux.elf"; do
+            if [ -s "$cand" ]; then VMLINUX="$cand"; break; fi
+        done
     fi
-    # Let the LKM builder generate Module.symvers from vmlinux
-    SYMVERS=""
+    if [ -z "$SYMVERS" ] || [ ! -s "$SYMVERS" ]; then
+        if [ -z "$VMLINUX" ]; then
+            die "no Module.symvers found (checked $KERNEL_DIR/Module.symvers, $ROOT/Module.symvers). Provide --symvers PATH, or place a vmlinux/vmlinux.elf in $ROOT (or pass --vmlinux PATH) to generate it (needs gen_symvers.py + vmlinux-to-elf; see README)"
+        fi
+        # Let the LKM builder generate Module.symvers from vmlinux
+        SYMVERS=""
+    fi
+
+    lkm_args=()
+    [ "$PULL" = 1 ] && lkm_args+=(--pull)
+    [ -n "$CONFIG" ] && lkm_args+=(--config "$CONFIG")
+    [ -n "$SYMVERS" ] && lkm_args+=(--symvers "$SYMVERS")
+    [ -n "$VMLINUX" ] && lkm_args+=(--vmlinux "$VMLINUX")
+    [ -n "$JOBS" ] && lkm_args+=(--jobs "$JOBS")
+
+    log "building KernelSU LKM"
+    PROJECT="$PROJECT" KERNEL_DIR="$KERNEL_DIR" NDK_ROOT="$NDK" \
+        OUT="$ROOT/build/$PROJECT" \
+        "$ROOT/tools/build_kernelsu_lkm.sh" "${lkm_args[@]}"
+    KO="$ROOT/build/$PROJECT/kernelsu.ko"
+    [ -f "$KO" ] || die "LKM build produced no $KO"
+else
+    log "building unified app only (using existing assets in build/unified)"
 fi
-
-lkm_args=()
-[ "$PULL" = 1 ] && lkm_args+=(--pull)
-[ -n "$CONFIG" ] && lkm_args+=(--config "$CONFIG")
-[ -n "$SYMVERS" ] && lkm_args+=(--symvers "$SYMVERS")
-[ -n "$VMLINUX" ] && lkm_args+=(--vmlinux "$VMLINUX")
-[ -n "$JOBS" ] && lkm_args+=(--jobs "$JOBS")
-
-log "building KernelSU LKM"
-PROJECT="$PROJECT" KERNEL_DIR="$KERNEL_DIR" NDK_ROOT="$NDK" \
-    OUT="$ROOT/build/$PROJECT" \
-    "$ROOT/tools/build_kernelsu_lkm.sh" "${lkm_args[@]}"
-KO="$ROOT/build/$PROJECT/kernelsu.ko"
-[ -f "$KO" ] || die "LKM build produced no $KO"
 
 APK=""
 if [ "$APP" = 1 ]; then
@@ -343,13 +361,17 @@ if [ "$APP" = 1 ]; then
     log "built $APK"
 fi
 
-# 3. push
+# 3. push/install
 if [ "$PUSH" = 0 ]; then
-    log "build only: $EXPLOIT"
-    [ -f "$LIB" ] && log "build only: $LIB"
-    log "build only: $KO"
+    [ -n "$EXPLOIT" ] && log "build only: $EXPLOIT"
+    [ -n "$LIB" ] && [ -f "$LIB" ] && log "build only: $LIB"
+    [ -n "$KO" ] && log "build only: $KO"
     [ -n "$APK" ] && log "build only: $APK"
-    log "add --push to install them on the device"
+    if [ -n "$APK" ]; then
+        log "add --push to install the app on the device"
+    else
+        log "add --push to install them on the device"
+    fi
     exit 0
 fi
 
@@ -358,7 +380,9 @@ command -v adb >/dev/null || die "adb not found; cannot --push"
 if [ "$APP" = 1 ]; then
     log "installing the Fracture app"
     adb_cmd install -r "$APK" || die "app install failed"
-else
+fi
+
+if [ "$APP_ONLY" = 0 ]; then
     log "pushing to /data/local/tmp"
     adb_cmd push "$EXPLOIT" /data/local/tmp/kgsl_root_su
     adb_cmd push "$KO" /data/local/tmp/kernelsu.ko
