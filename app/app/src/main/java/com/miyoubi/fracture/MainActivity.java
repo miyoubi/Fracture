@@ -128,18 +128,6 @@ public final class MainActivity extends AppCompatActivity {
         btnShizuku = findViewById(R.id.btnShizuku);
         cardShizuku = findViewById(R.id.cardShizuku);
         cardOutput = findViewById(R.id.cardOutput);
-
-        View btnCopyLog = findViewById(R.id.btnCopyLog);
-        if (btnCopyLog != null) {
-            btnCopyLog.setOnClickListener(v -> copyLog());
-        }
-        View btnClearLog = findViewById(R.id.btnClearLog);
-        if (btnClearLog != null) {
-            btnClearLog.setOnClickListener(v -> {
-                LogStore.clear();
-                rebuildLogView();
-            });
-        }
         applyPersonalization();
 
         View.OnClickListener ksuActiveClick = v -> {
@@ -650,16 +638,6 @@ public final class MainActivity extends AppCompatActivity {
         return prefs != null && prefs.getBoolean("detailed_output", false);
     }
 
-    private void copyLog() {
-        String text = logView != null ? logView.getText().toString() : "";
-        if (text.trim().isEmpty()) return;
-        android.content.ClipboardManager cm =
-                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        if (cm != null) {
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("Fracture log", text));
-            Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show();
-        }
-    }
 
     private void updateLogEmptyState(String text) {
         if (logEmpty == null) return;
