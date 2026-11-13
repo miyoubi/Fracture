@@ -92,6 +92,12 @@ public final class SettingsActivity extends AppCompatActivity {
                 }
             }
             dropdownAccentColor.setText(accentLabels[accentIndex], false);
+            dropdownAccentColor.dismissDropDown();
+            dropdownAccentColor.clearFocus();
+            dropdownAccentColor.post(() -> {
+                dropdownAccentColor.dismissDropDown();
+                dropdownAccentColor.clearFocus();
+            });
             dropdownAccentColor.setOnItemClickListener((parent, view, position, id) -> {
                 String selected = accentAdapter.valueAt(position);
                 if (!selected.equals(appliedAccent)) {
