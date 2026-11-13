@@ -72,6 +72,75 @@ static const struct target_profile g_profiles[] = {
         .selinux_state_off = 0x31ae000ULL,
         .gadget_store_off = 0x424350ULL,
     },
+    /* XQ-AT42, XQ-AT51, XQ-AT52, XQ-AT72 (Xperia 1 II) and XQ-AS42,
+     * XQ-AS52, XQ-AS62, XQ-AS72 (Xperia 5 II) global variants.  Offsets
+     * derived from split boot kernels (4.19.157-perf+).  Where the
+     * ro.build.display.id is known it is pinned; selection still falls back
+     * to a model match for other builds of the same model. */
+    {
+        .model = "XQ-AT42",
+        .build = "58.2.A.10.102",
+        .fingerprint = "XQ-AT42/58.2.A.10.102",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ae000ULL,
+        .gadget_store_off = 0x424350ULL,
+    },
+    {
+        .model = "XQ-AT51",
+        .build = "58.2.A.7.93",
+        .fingerprint = "XQ-AT51/58.2.A.7.93",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ac000ULL,
+        .gadget_store_off = 0x4282d8ULL,
+    },
+    {
+        .model = "XQ-AT52",
+        .build = "58.2.A.7.93",
+        .fingerprint = "XQ-AT52/58.2.A.7.93",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ac000ULL,
+        .gadget_store_off = 0x4282d8ULL,
+    },
+    {
+        .model = "XQ-AT72",
+        .build = "58.2.A.10.44A",
+        .fingerprint = "XQ-AT72/58.2.A.10.44A",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ac000ULL,
+        .gadget_store_off = 0x4282d8ULL,
+    },
+    {
+        .model = "XQ-AS42",
+        .build = "58.2.A.10.163",
+        .fingerprint = "XQ-AS42/58.2.A.10.163",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ad000ULL,
+        .gadget_store_off = 0x427410ULL,
+    },
+    {
+        .model = "XQ-AS52",
+        .build = "58.2.A.10.126",
+        .fingerprint = "XQ-AS52/58.2.A.10.126",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ad000ULL,
+        .gadget_store_off = 0x427410ULL,
+    },
+    {
+        .model = "XQ-AS62",
+        .build = "58.2.A.10.126",
+        .fingerprint = "XQ-AS62/58.2.A.10.126",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ad000ULL,
+        .gadget_store_off = 0x427410ULL,
+    },
+    {
+        .model = "XQ-AS72",
+        .build = "58.2.A.10.126",
+        .fingerprint = "XQ-AS72/58.2.A.10.126",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ad000ULL,
+        .gadget_store_off = 0x427410ULL,
+    },
 };
 
 const struct target_profile *target_profile_get(void) {
@@ -80,12 +149,17 @@ const struct target_profile *target_profile_get(void) {
     __system_property_get("ro.product.model", model);
     __system_property_get("ro.build.display.id", build);
 
+    const struct target_profile *model_match = NULL;
     for (size_t i = 0; i < sizeof(g_profiles) / sizeof(g_profiles[0]); i++) {
-        if (strcmp(model, g_profiles[i].model) == 0 &&
-            strcmp(build, g_profiles[i].build) == 0) {
+        if (strcmp(model, g_profiles[i].model) != 0)
+            continue;
+        if (g_profiles[i].build && strcmp(build, g_profiles[i].build) == 0)
             return &g_profiles[i];
-        }
+        if (!model_match)
+            model_match = &g_profiles[i];
     }
+    if (model_match)
+        return model_match;
     return NULL;
 }
 

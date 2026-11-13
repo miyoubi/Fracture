@@ -33,7 +33,28 @@ final class DeviceProfile {
             case "SO-51A|58.2.B.0.520": return "so-51a-58.2.B.0.520";
             case "SO-52A|58.2.B.0.520": return "so-52a-58.2.B.0.520";
             case "SOG01|58.2.C.5.10": return "sog01-58.2.C.5.10";
-            default: return null;
+            case "XQ-AT42|58.2.A.10.102": return "unified";
+            case "XQ-AT51|58.2.A.7.93": return "unified";
+            case "XQ-AT52|58.2.A.7.93": return "unified";
+            case "XQ-AT72|58.2.A.10.44A": return "unified";
+            case "XQ-AS42|58.2.A.10.163": return "unified";
+            case "XQ-AS52|58.2.A.10.126": return "unified";
+            case "XQ-AS62|58.2.A.10.126": return "unified";
+            case "XQ-AS72|58.2.A.10.126": return "unified";
+            default: break;
+        }
+        switch (model) {
+            case "XQ-AT42":
+            case "XQ-AT51":
+            case "XQ-AT52":
+            case "XQ-AT72":
+            case "XQ-AS42":
+            case "XQ-AS52":
+            case "XQ-AS62":
+            case "XQ-AS72":
+                return "unified";
+            default:
+                return null;
         }
     }
 

@@ -9,6 +9,14 @@ Profiles in the tree, derived from the split_img kernels with
 | `so-52a-58.2.B.0.520` | `0x31ad000` | `0x427410` | `0x117228` |
 | `so-51a-58.2.B.0.520` | `0x31ae000` | `0x424350` | `0x117228` |
 | `sog01-58.2.C.5.10` | `0x31ae000` | `0x424350` | `0x117228` |
+| `xq-as42-58.2.A.10.163` | `0x31ad000` | `0x427410` | `0x117228` |
+| `xq-as52-58.2.A.10.126` | `0x31ad000` | `0x427410` | `0x117228` |
+| `xq-as62-58.2.A.10.126` | `0x31ad000` | `0x427410` | `0x117228` |
+| `xq-as72-58.2.A.10.126` | `0x31ad000` | `0x427410` | `0x117228` |
+| `xq-at42-58.2.A.10.102` | `0x31ae000` | `0x424350` | `0x117228` |
+| `xq-at51-58.2.A.7.93` | `0x31ac000` | `0x4282d8` | `0x117228` |
+| `xq-at52-58.2.A.7.93` | `0x31ac000` | `0x4282d8` | `0x117228` |
+| `xq-at72-58.2.A.10.44A` | `0x31ac000` | `0x4282d8` | `0x117228` |
 
 All four kernels put `_text` at `0xffffff8008080000`, `__switch_to` at
 `+0x88c0` (continuation `+0x89fc`), and share the task_struct/cred layout
@@ -74,10 +82,13 @@ KGSL:
 Then add `src/targets/<project>/target.h` and a `target_profile` entry
 and build with `PROJECT=<project>`.
 
-The SOG02 and SO-52A images use the `0x427410` store gadget; SO-51A and
-SOG01 use `0x424350` (the continuation `0x89fc` and switch return
-`0x117228` are the same). The struct offsets are shared across the
-current four images, but re-derive them for anything else.
+XQ-AS42/52/62/72 match the SOG02/SO-52A image offsets; XQ-AT42 matches the
+SO-51A/SOG01 offsets; XQ-AT51/52/72 use a distinct `selinux_state`/store
+gadget (`0x31ac000` / `0x4282d8`). The continuation `0x89fc` and switch
+return `0x117228` are the same across these images. The struct offsets are
+shared across the current 4.19.157 Xperia sm8250 images analyzed here, but
+re-derive them for anything else. XQ-AT42, XQ-AT51, XQ-AT52, XQ-AT72, XQ-AS42, XQ-AS52, XQ-AS62, XQ-AS72 profiles are selected by
+`ro.product.model` (build ID may vary by firmware).
 
 ## Deriving the offsets
 

@@ -205,7 +205,14 @@ detect_project() {
     build=$(device_prop ro.build.display.id)
     [ -n "$model" ] || die "no device found; pass --project (make list-projects)"
     case "$model|$build" in
-        "SOG02|58.2.C.3.127"|"SO-51A|58.2.B.0.520"|"SO-52A|58.2.B.0.520"|"SOG01|58.2.C.5.10")
+        "SOG02|58.2.C.3.127"|"SO-51A|58.2.B.0.520"|"SO-52A|58.2.B.0.520"|"SOG01|58.2.C.5.10"|\
+        "XQ-AT42|58.2.A.10.102"|"XQ-AT51|58.2.A.7.93"|"XQ-AT52|58.2.A.7.93"|"XQ-AT72|58.2.A.10.44A"|\
+        "XQ-AS42|58.2.A.10.163"|"XQ-AS52|58.2.A.10.126"|"XQ-AS62|58.2.A.10.126"|"XQ-AS72|58.2.A.10.126")
+            printf 'unified'
+            return ;;
+    esac
+    case "$model" in
+        XQ-AT42|XQ-AT51|XQ-AT52|XQ-AT72|XQ-AS42|XQ-AS52|XQ-AS62|XQ-AS72)
             printf 'unified'
             return ;;
     esac

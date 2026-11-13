@@ -5,7 +5,7 @@
 > I am not responsible for any damage to your device.
 
 KGSL UAF temporary-root exploit for the Sony Xperia 1 II / 5 II family
-(SO-51A, SO-52A, SOG01, SOG02).  It
+(SO-51A, SO-52A, SOG01, SOG02 and XQ-AT42, XQ-AT51, XQ-AT52, XQ-AT72, XQ-AS42, XQ-AS52, XQ-AS62, XQ-AS72 global variants).  It
 patches the process credentials, flips SELinux permissive through the
 forged `thread.cpu_context` switch-in, and can late-load a KernelSU LKM
 plus its userspace.
@@ -16,6 +16,14 @@ plus its userspace.
 | `so-51a-58.2.B.0.520` | Sony Xperia 1 II (SO-51A) | `58.2.B.0.520` | `4.19.157-perf+` |
 | `so-52a-58.2.B.0.520` | Sony Xperia 5 II (SO-52A) | `58.2.B.0.520` | `4.19.157-perf+` |
 | `sog01-58.2.C.5.10` | Sony Xperia 1 II (SOG01, KDDI) | `58.2.C.5.10` | `4.19.157-perf+` |
+| `xq-at42-58.2.A.10.102` | Xperia 1 II (XQ-AT42) | `58.2.A.10.102` | `4.19.157-perf+` |
+| `xq-at51-58.2.A.7.93` | Xperia 1 II (XQ-AT51) | `58.2.A.7.93` | `4.19.157-perf+` |
+| `xq-at52-58.2.A.7.93` | Xperia 1 II (XQ-AT52) | `58.2.A.7.93` | `4.19.157-perf+` |
+| `xq-at72-58.2.A.10.44A` | Xperia 1 II (XQ-AT72) | `58.2.A.10.44A` | `4.19.157-perf+` |
+| `xq-as42-58.2.A.10.163` | Xperia 5 II (XQ-AS42) | `58.2.A.10.163` | `4.19.157-perf+` |
+| `xq-as52-58.2.A.10.126` | Xperia 5 II (XQ-AS52) | `58.2.A.10.126` | `4.19.157-perf+` |
+| `xq-as62-58.2.A.10.126` | Xperia 5 II (XQ-AS62) | `58.2.A.10.126` | `4.19.157-perf+` |
+| `xq-as72-58.2.A.10.126` | Xperia 5 II (XQ-AS72) | `58.2.A.10.126` | `4.19.157-perf+` |
 
 ## Documentation
 
@@ -105,7 +113,7 @@ The simplest path:
 ./build.sh --setup                         # fetch the NDK and kernel if missing
 ```
 
-Profiles are SOG02, SO-51A, SO-52A and SOG01. Pushing is opt-in with
+Profiles include SOG02, SO-51A, SO-52A, SOG01 and XQ-AT42, XQ-AT51, XQ-AT52, XQ-AT72, XQ-AS42, XQ-AS52, XQ-AS62, XQ-AS72 (1 II/5 II) variants. Pushing is opt-in with
 `--push`; the pushed files are verified by md5. `--setup` downloads
 `android-ndk-r26d` and clones `kernel_sony_sm8250` when they are missing;
 `--force --setup` deletes and re-fetches both.
