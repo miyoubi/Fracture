@@ -6,18 +6,24 @@ import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.Filter;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 final class AccentColorAdapter extends ArrayAdapter<String> {
+    private final String[] labels;
     private final String[] values;
     private final int iconSize;
     private final int iconPad;
 
     AccentColorAdapter(@NonNull Context context, String[] labels, String[] values) {
-        super(context, android.R.layout.simple_list_item_1, labels);
+        super(context, android.R.layout.simple_list_item_1, new ArrayList<>(Arrays.asList(labels)));
+        this.labels = labels.clone();
         this.values = values;
         float d = context.getResources().getDisplayMetrics().density;
         this.iconSize = (int) (20 * d);
@@ -26,6 +32,27 @@ final class AccentColorAdapter extends ArrayAdapter<String> {
 
     String valueAt(int position) {
         return (position >= 0 && position < values.length) ? values[position] : ThemeHelper.ACCENT_PURPLE;
+    }
+
+    @NonNull
+    @Override
+    public Filter getFilter() {
+        return new Filter() {
+            @Override
+            protected FilterResults performFiltering(CharSequence constraint) {
+                FilterResults results = new FilterResults();
+                results.values = Arrays.asList(labels);
+                results.count = labels.length;
+                return results;
+            }
+
+            @Override
+            protected void publishResults(CharSequence constraint, FilterResults results) {
+                clear();
+                addAll(labels);
+                notifyDataSetChanged();
+            }
+        };
     }
 
     @NonNull
