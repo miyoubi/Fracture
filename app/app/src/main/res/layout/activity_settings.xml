@@ -267,7 +267,8 @@
                             android:inputType="none"
                             android:paddingTop="14dp"
                             android:paddingBottom="14dp"
-                            android:popupBackground="@drawable/bg_dropdown_popup" />
+                            android:popupBackground="@drawable/bg_dropdown_popup"
+                            android:saveEnabled="false" />
                     </com.google.android.material.textfield.TextInputLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
