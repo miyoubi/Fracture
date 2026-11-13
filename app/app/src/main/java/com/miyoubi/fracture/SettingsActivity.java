@@ -94,7 +94,9 @@ public final class SettingsActivity extends AppCompatActivity {
             dropdownAccentColor.setText(accentLabels[accentIndex], false);
             dropdownAccentColor.setOnItemClickListener((parent, view, position, id) -> {
                 String selected = accentAdapter.valueAt(position);
-                if (!selected.equals(ThemeHelper.getAccent(this))) {
+                if (!selected.equals(appliedAccent)) {
+                    appliedAccent = selected;
+                    dropdownAccentColor.dismissDropDown();
                     prefs.edit().putString(ThemeHelper.PREF_ACCENT, selected).apply();
                     recreate();
                 }
