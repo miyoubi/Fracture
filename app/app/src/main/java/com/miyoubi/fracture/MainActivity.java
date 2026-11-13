@@ -626,7 +626,6 @@ public final class MainActivity extends AppCompatActivity {
         if (!ksuModule) return null;
         StringBuilder via = new StringBuilder();
         if (ksuNativeActive) via.append(getString(R.string.ksu_detail_native));
-        if (ksuShellActive) via.append(getString(R.string.ksu_detail_shell));
         if (ksuReceipt) via.append(getString(R.string.ksu_detail_receipt));
         String mgr;
         if (ksuManager) {

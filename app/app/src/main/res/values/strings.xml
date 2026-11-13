@@ -56,7 +56,6 @@
     <string name="clear">Clear</string>
     <string name="ksu_active_detail">Active%1$s%2$s</string>
     <string name="ksu_detail_native"> • native</string>
-    <string name="ksu_detail_shell"> • via su</string>
     <string name="ksu_detail_receipt"> • verified this boot</string>
     <string name="ksu_manager_detail">Manager: %1$s%2$s</string>
     <string name="ksu_manager_version"> v%1$s</string>
