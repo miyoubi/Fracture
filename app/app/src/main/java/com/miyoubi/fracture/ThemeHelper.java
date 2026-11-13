@@ -24,7 +24,7 @@ final class ThemeHelper {
 
     static int accentColor(String accent) {
         switch (accent) {
-            case ACCENT_MONET: return 0;
+            case ACCENT_MONET: return Color.parseColor("#6750A4");
             case ACCENT_BLUE: return Color.parseColor("#1565C0");
             case ACCENT_GREEN: return Color.parseColor("#2E7D32");
             case ACCENT_RED: return Color.parseColor("#C62828");
@@ -40,20 +40,6 @@ final class ThemeHelper {
         GradientDrawable d = new GradientDrawable();
         d.setShape(GradientDrawable.OVAL);
         d.setColor(color);
-        d.setSize(sizePx, sizePx);
-        return d;
-    }
-
-    static GradientDrawable makeMonetCircle(int sizePx) {
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.OVAL);
-        d.setColors(new int[]{
-                Color.parseColor("#4285F4"),
-                Color.parseColor("#34A853"),
-                Color.parseColor("#FBBC05"),
-                Color.parseColor("#EA4335")
-        });
-        d.setOrientation(GradientDrawable.Orientation.TL_BR);
         d.setSize(sizePx, sizePx);
         return d;
     }

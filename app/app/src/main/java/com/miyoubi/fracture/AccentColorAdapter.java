@@ -72,12 +72,7 @@ final class AccentColorAdapter extends ArrayAdapter<String> {
 
     private void bind(TextView tv, int position) {
         String v = valueAt(position);
-        Drawable icon;
-        if (ThemeHelper.ACCENT_MONET.equals(v)) {
-            icon = ThemeHelper.makeMonetCircle(iconSize);
-        } else {
-            icon = ThemeHelper.makeCircle(ThemeHelper.accentColor(v), iconSize);
-        }
+        Drawable icon = ThemeHelper.makeCircle(ThemeHelper.accentColor(v), iconSize);
         icon.setBounds(0, 0, iconSize, iconSize);
         tv.setCompoundDrawables(icon, null, null, null);
         tv.setCompoundDrawablePadding(iconPad);
