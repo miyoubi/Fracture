@@ -1,8 +1,24 @@
+import java.io.ByteArrayOutputStream
+
 plugins {
     id("com.android.application")
 }
 
 val repoRoot: File = rootProject.projectDir.parentFile
+val gitSha: String = run {
+    try {
+        val out = ByteArrayOutputStream()
+        exec {
+            commandLine("git", "rev-parse", "--short=7", "HEAD")
+            workingDir = repoRoot
+            standardOutput = out
+            isIgnoreExitValue = true
+        }
+        out.toString().trim().ifEmpty { "unknown" }
+    } catch (_: Exception) {
+        "unknown"
+    }
+}
 val profiles = listOf(
     "sog02-58.2.C.3.127",
     "so-51a-58.2.B.0.520",
@@ -20,6 +36,7 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "2.0"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=none")
@@ -28,6 +45,10 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     externalNativeBuild {

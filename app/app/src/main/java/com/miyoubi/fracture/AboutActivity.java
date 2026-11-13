@@ -37,7 +37,12 @@ public final class AboutActivity extends AppCompatActivity {
             versionCode = info.getLongVersionCode();
         } catch (Exception ignored) {
         }
-        tvVersion.setText(getString(R.string.about_version, versionName, versionCode));
+        String sha = BuildConfig.GIT_SHA;
+        if (sha != null && !sha.isEmpty() && !"unknown".equals(sha)) {
+            tvVersion.setText(getString(R.string.about_version_sha, versionName, sha, versionCode));
+        } else {
+            tvVersion.setText(getString(R.string.about_version, versionName, versionCode));
+        }
     }
 
     private void bindLink(int viewId, int urlResId) {

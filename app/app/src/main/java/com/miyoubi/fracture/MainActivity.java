@@ -99,7 +99,12 @@ public final class MainActivity extends AppCompatActivity {
             } catch (Exception ignored) {
             }
             if (versionName != null && !versionName.isEmpty()) {
-                toolbar.setSubtitle("v" + versionName);
+                String sha = BuildConfig.GIT_SHA;
+                if (sha != null && !sha.isEmpty() && !"unknown".equals(sha)) {
+                    toolbar.setSubtitle("v" + versionName + " (" + sha + ")");
+                } else {
+                    toolbar.setSubtitle("v" + versionName);
+                }
             }
         }
         View menuCard = findViewById(R.id.menuCard);
