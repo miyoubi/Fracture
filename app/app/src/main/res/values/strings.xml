@@ -50,6 +50,10 @@
 
     <string name="output">Output</string>
     <string name="ready_hint">Grant Shizuku access, then run.</string>
+    <string name="output_empty">Output will appear here when you run the exploit.</string>
+    <string name="copy">Copy</string>
+    <string name="copied">Copied</string>
+    <string name="clear">Clear</string>
     <string name="send_logs">Send logs</string>
     <string name="send_logs_desc">Share diagnostic logs and device info</string>
     <string name="detailed_output">Detailed output</string>

@@ -32,6 +32,14 @@ final class LogStore {
         return out.toString();
     }
 
+    static synchronized void clear() {
+        LOG.setLength(0);
+    }
+
+    static synchronized boolean isEmpty() {
+        return LOG.length() == 0;
+    }
+
     static boolean isSimpleLine(String line) {
         String l = line;
         if (l.startsWith("—") || l.contains("—")) return true;

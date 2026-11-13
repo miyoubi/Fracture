@@ -66,6 +66,8 @@ public final class MainActivity extends AppCompatActivity {
     private ScrollView logScroll;
     private LinearProgressIndicator progress;
     private TextView logView;
+    private TextView logEmpty;
+    private View logContainer;
     private Chip chipStatus;
     private Chip chipKernelSuActive;
     private MaterialButton btnRun;
@@ -118,12 +120,26 @@ public final class MainActivity extends AppCompatActivity {
         logScroll = findViewById(R.id.logScroll);
         progress = findViewById(R.id.progress);
         logView = findViewById(R.id.logView);
+        logEmpty = findViewById(R.id.logEmpty);
+        logContainer = findViewById(R.id.logContainer);
         chipStatus = findViewById(R.id.chipStatus);
         chipKernelSuActive = findViewById(R.id.chipKernelSuActive);
         btnRun = findViewById(R.id.btnRun);
         btnShizuku = findViewById(R.id.btnShizuku);
         cardShizuku = findViewById(R.id.cardShizuku);
         cardOutput = findViewById(R.id.cardOutput);
+
+        View btnCopyLog = findViewById(R.id.btnCopyLog);
+        if (btnCopyLog != null) {
+            btnCopyLog.setOnClickListener(v -> copyLog());
+        }
+        View btnClearLog = findViewById(R.id.btnClearLog);
+        if (btnClearLog != null) {
+            btnClearLog.setOnClickListener(v -> {
+                LogStore.clear();
+                rebuildLogView();
+            });
+        }
         applyPersonalization();
 
         View.OnClickListener ksuActiveClick = v -> {
@@ -148,9 +164,7 @@ public final class MainActivity extends AppCompatActivity {
         btnRun.setOnClickListener(v -> runExploit());
 
         Shizuku.addRequestPermissionResultListener(permissionListener);
-        if (LogStore.getDetailed().isEmpty()) {
-            appendLog(getString(R.string.ready_hint));
-        }
+        rebuildLogView();
         updateShizuku();
     }
 
@@ -391,6 +405,19 @@ public final class MainActivity extends AppCompatActivity {
                         com.google.android.material.R.attr.colorSurfaceContainerHigh));
             }
         }
+        if (logContainer != null && prefs != null) {
+            boolean transparent = prefs.getBoolean("transparent_output", false);
+            if (logContainer instanceof com.google.android.material.card.MaterialCardView) {
+                com.google.android.material.card.MaterialCardView c =
+                        (com.google.android.material.card.MaterialCardView) logContainer;
+                if (transparent) {
+                    c.setCardBackgroundColor(android.graphics.Color.TRANSPARENT);
+                } else {
+                    c.setCardBackgroundColor(MaterialColors.getColor(c,
+                            com.google.android.material.R.attr.colorSurfaceContainer));
+                }
+            }
+        }
     }
 
     private void animateInIfNeeded(View v) {
@@ -623,10 +650,28 @@ public final class MainActivity extends AppCompatActivity {
         return prefs != null && prefs.getBoolean("detailed_output", false);
     }
 
+    private void copyLog() {
+        String text = logView != null ? logView.getText().toString() : "";
+        if (text.trim().isEmpty()) return;
+        android.content.ClipboardManager cm =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) {
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Fracture log", text));
+            Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateLogEmptyState(String text) {
+        if (logEmpty == null) return;
+        boolean empty = text == null || text.trim().isEmpty();
+        logEmpty.setVisibility(empty ? View.VISIBLE : View.GONE);
+    }
+
     private void rebuildLogView() {
         if (logView == null) return;
         String text = isDetailedOutput() ? LogStore.getDetailed() : LogStore.getSimple();
         logView.setText(text);
+        updateLogEmptyState(text);
         if (logScroll != null) {
             logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
         }
@@ -636,14 +681,21 @@ public final class MainActivity extends AppCompatActivity {
         LogStore.append(line);
         if (logView == null) return;
         if (isDetailedOutput()) {
-            logView.setText(LogStore.getDetailed());
+            String text = LogStore.getDetailed();
+            logView.setText(text);
+            updateLogEmptyState(text);
         } else if (LogStore.isSimpleLine(line)) {
             CharSequence cur = logView.getText();
+            String newText;
             if (cur == null || cur.length() == 0) {
-                logView.setText(line + "\n");
+                newText = line + "\n";
             } else {
-                logView.append(line + "\n");
+                newText = cur.toString() + line + "\n";
             }
+            logView.setText(newText);
+            updateLogEmptyState(newText);
+        } else {
+            updateLogEmptyState(logView.getText().toString());
         }
         if (logScroll != null) {
             logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
