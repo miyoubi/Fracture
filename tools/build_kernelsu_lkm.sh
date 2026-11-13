@@ -196,6 +196,9 @@ fi
 log "Module.symvers: $(wc -l < "$SYMVERS") symbols"
 
 # 5. Config + generated headers
+# Some checkouts/archives lose exec bits on kernel helper scripts.
+find "$KERNEL_DIR/scripts" -type f \( -name '*.sh' -o -name 'mkcompile_h' \) -exec chmod +x {} + 2>/dev/null || true
+
 MAKE_ARGS=(
     "ARCH=arm64" "LLVM_IAS=1"
     "CROSS_COMPILE=aarch64-linux-android${API}-"
