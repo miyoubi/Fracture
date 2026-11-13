@@ -67,7 +67,6 @@ public final class MainActivity extends AppCompatActivity {
     private LinearProgressIndicator progress;
     private TextView logView;
     private TextView logEmpty;
-    private View logContainer;
     private Chip chipStatus;
     private Chip chipKernelSuActive;
     private MaterialButton btnRun;
@@ -121,7 +120,6 @@ public final class MainActivity extends AppCompatActivity {
         progress = findViewById(R.id.progress);
         logView = findViewById(R.id.logView);
         logEmpty = findViewById(R.id.logEmpty);
-        logContainer = findViewById(R.id.logContainer);
         chipStatus = findViewById(R.id.chipStatus);
         chipKernelSuActive = findViewById(R.id.chipKernelSuActive);
         btnRun = findViewById(R.id.btnRun);
@@ -391,19 +389,6 @@ public final class MainActivity extends AppCompatActivity {
             } else {
                 cardOutput.setCardBackgroundColor(MaterialColors.getColor(cardOutput,
                         com.google.android.material.R.attr.colorSurfaceContainerHigh));
-            }
-        }
-        if (logContainer != null && prefs != null) {
-            boolean transparent = prefs.getBoolean("transparent_output", false);
-            if (logContainer instanceof com.google.android.material.card.MaterialCardView) {
-                com.google.android.material.card.MaterialCardView c =
-                        (com.google.android.material.card.MaterialCardView) logContainer;
-                if (transparent) {
-                    c.setCardBackgroundColor(android.graphics.Color.TRANSPARENT);
-                } else {
-                    c.setCardBackgroundColor(MaterialColors.getColor(c,
-                            com.google.android.material.R.attr.colorSurfaceContainer));
-                }
             }
         }
     }

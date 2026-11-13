@@ -274,52 +274,41 @@
                     app:trackCornerRadius="2dp"
                     app:trackThickness="3dp" />
 
-                <com.google.android.material.card.MaterialCardView
-                    android:id="@+id/logContainer"
+                <FrameLayout
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
-                    android:layout_marginTop="10dp"
-                    android:layout_weight="1"
-                    app:cardBackgroundColor="?attr/colorSurfaceContainer"
-                    app:cardCornerRadius="16dp"
-                    app:cardElevation="0dp"
-                    app:strokeWidth="0dp">
+                    android:layout_marginTop="8dp"
+                    android:layout_weight="1">
 
-                    <FrameLayout
+                    <ScrollView
+                        android:id="@+id/logScroll"
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent">
-
-                        <ScrollView
-                            android:id="@+id/logScroll"
-                            android:layout_width="match_parent"
-                            android:layout_height="match_parent"
-                            android:fillViewport="true"
-                            android:scrollbars="vertical">
-
-                            <TextView
-                                android:id="@+id/logView"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:fontFamily="monospace"
-                                android:lineSpacingExtra="3dp"
-                                android:padding="12dp"
-                                android:textColor="?attr/colorOnSurface"
-                                android:textIsSelectable="true"
-                                android:textSize="12sp" />
-                        </ScrollView>
+                        android:layout_height="match_parent"
+                        android:fillViewport="true"
+                        android:scrollbars="vertical">
 
                         <TextView
-                            android:id="@+id/logEmpty"
+                            android:id="@+id/logView"
                             android:layout_width="match_parent"
-                            android:layout_height="match_parent"
-                            android:gravity="center"
-                            android:padding="16dp"
-                            android:text="@string/output_empty"
-                            android:textAlignment="center"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-                    </FrameLayout>
-                </com.google.android.material.card.MaterialCardView>
+                            android:layout_height="wrap_content"
+                            android:fontFamily="monospace"
+                            android:lineSpacingExtra="3dp"
+                            android:textColor="?attr/colorOnSurface"
+                            android:textIsSelectable="true"
+                            android:textSize="12sp" />
+                    </ScrollView>
+
+                    <TextView
+                        android:id="@+id/logEmpty"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:gravity="center"
+                        android:padding="16dp"
+                        android:text="@string/output_empty"
+                        android:textAlignment="center"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+                </FrameLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
     </LinearLayout>
