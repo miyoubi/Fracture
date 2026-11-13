@@ -62,6 +62,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextView tvShizuku;
     private TextView tvKernelSu;
     private View cardKernelSu;
+    private TextView tvKernelSuDetail;
     private TextView tvKernelSuAction;
     private ScrollView logScroll;
     private LinearProgressIndicator progress;
@@ -73,12 +74,21 @@ public final class MainActivity extends AppCompatActivity {
     private MaterialButton btnShizuku;
     private View cardShizuku;
     private com.google.android.material.card.MaterialCardView cardOutput;
+    private com.google.android.material.checkbox.MaterialCheckBox cbAutoScroll;
+    private com.google.android.material.checkbox.MaterialCheckBox cbTimestamps;
     private boolean shizukuReady;
     private boolean ksuManager;
     private String ksuManagerPkg;
+    private String ksuManagerVersion;
     private boolean ksuModule;
+    private boolean ksuNativeActive;
+    private boolean ksuShellActive;
+    private boolean ksuReceipt;
     private boolean managerLaunched;
     private boolean running;
+    private boolean autoScroll = true;
+    private boolean showTimestamps = false;
+    private String selinuxMode;
 
     private String appliedAccent;
 
