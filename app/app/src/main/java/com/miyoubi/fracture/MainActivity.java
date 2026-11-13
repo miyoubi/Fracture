@@ -79,9 +79,13 @@ public final class MainActivity extends AppCompatActivity {
     private boolean managerLaunched;
     private boolean running;
 
+    private String appliedAccent;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        ThemeHelper.apply(this);
         super.onCreate(savedInstanceState);
+        appliedAccent = ThemeHelper.getAccent(this);
         setContentView(R.layout.activity_main);
 
         MaterialToolbar toolbar = findViewById(R.id.topAppBar);
@@ -148,6 +152,11 @@ public final class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        String currentAccent = ThemeHelper.getAccent(this);
+        if (appliedAccent != null && !appliedAccent.equals(currentAccent)) {
+            recreate();
+            return;
+        }
         applyPersonalization();
         rebuildLogView();
         updateShizuku();

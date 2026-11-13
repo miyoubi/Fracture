@@ -37,6 +37,16 @@
     <string name="ksu_display_card">Card</string>
     <string name="ksu_display_chip">Chip next to support</string>
     <string name="ksu_display_button">Replace Run button</string>
+    <string name="accent_color">Accent color</string>
+    <string name="accent_color_desc">Choose the app accent, or use Material You (Monet)</string>
+    <string name="accent_monet">Monet (Material You)</string>
+    <string name="accent_purple">Purple</string>
+    <string name="accent_blue">Blue</string>
+    <string name="accent_green">Green</string>
+    <string name="accent_red">Red</string>
+    <string name="accent_orange">Orange</string>
+    <string name="accent_pink">Pink</string>
+    <string name="accent_teal">Teal</string>
 
     <string name="output">Output</string>
     <string name="ready_hint">Grant Shizuku access, then run.</string>

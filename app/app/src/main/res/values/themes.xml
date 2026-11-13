@@ -25,4 +25,47 @@
         <item name="shapeAppearance">@style/ShapeAppearance.Fracture.Card</item>
         <item name="cardElevation">0dp</item>
     </style>
+
+    <style name="ThemeOverlay.Fracture.Accent.Purple" parent="">
+        <item name="colorPrimary">#5B4D8A</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#D0C4EA</item>
+        <item name="colorOnPrimaryContainer">#1E1242</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Blue" parent="">
+        <item name="colorPrimary">#1565C0</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#D0E4FF</item>
+        <item name="colorOnPrimaryContainer">#001D36</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Green" parent="">
+        <item name="colorPrimary">#2E7D32</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#C8E6C9</item>
+        <item name="colorOnPrimaryContainer">#00210B</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Red" parent="">
+        <item name="colorPrimary">#C62828</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#FFCDD2</item>
+        <item name="colorOnPrimaryContainer">#410002</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Orange" parent="">
+        <item name="colorPrimary">#E65100</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#FFCCBC</item>
+        <item name="colorOnPrimaryContainer">#3E0400</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Pink" parent="">
+        <item name="colorPrimary">#AD1457</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#F8BBD0</item>
+        <item name="colorOnPrimaryContainer">#3E001D</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Teal" parent="">
+        <item name="colorPrimary">#00695C</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#B2DFDB</item>
+        <item name="colorOnPrimaryContainer">#00201C</item>
+    </style>
 </resources>

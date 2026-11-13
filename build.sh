@@ -11,7 +11,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
-PROJECT=""
+PROJECT="unified"
 SERIAL="${ANDROID_SERIAL:-}"
 PUSH=0
 RUN=0
@@ -243,16 +243,12 @@ if [ "$SETUP" = 1 ]; then
 fi
 
 [ -d "$ROOT/src" ] || die "run this from the repository root"
-if [ -z "$PROJECT" ]; then
-    if [ "$DETECT" = 1 ]; then
-        PROJECT=$(detect_project)
-    elif [ "$SETUP" = 1 ]; then
-        log "setup complete"
-        list_targets
-        exit 0
-    else
-        die "pass -p <project> (run ./build.sh with no arguments to list targets)"
-    fi
+if [ "$DETECT" = 1 ]; then
+    PROJECT=$(detect_project)
+elif [ "$SETUP" = 1 ] && [ "$ARG_COUNT" -eq 1 ]; then
+    log "setup complete"
+    list_targets
+    exit 0
 fi
 if [ "$PROJECT" != unified ] && [ ! -d "$ROOT/src/targets/$PROJECT" ]; then
     die "unknown project $PROJECT (make list-projects)"

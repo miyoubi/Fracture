@@ -15,9 +15,13 @@ import com.google.android.material.materialswitch.MaterialSwitch;
 
 public final class SettingsActivity extends AppCompatActivity {
 
+    private String appliedAccent;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        ThemeHelper.apply(this);
         super.onCreate(savedInstanceState);
+        appliedAccent = ThemeHelper.getAccent(this);
         setContentView(R.layout.activity_settings);
 
         MaterialToolbar toolbar = findViewById(R.id.topAppBar);
@@ -54,6 +58,50 @@ public final class SettingsActivity extends AppCompatActivity {
             switchHideShizuku.setOnCheckedChangeListener((button, checked) ->
                     prefs.edit().putBoolean("hide_shizuku_card", checked).apply());
         }
+
+        AutoCompleteTextView dropdownAccentColor = findViewById(R.id.dropdownAccentColor);
+        if (dropdownAccentColor != null) {
+            String[] accentValues = {
+                    ThemeHelper.ACCENT_MONET,
+                    ThemeHelper.ACCENT_PURPLE,
+                    ThemeHelper.ACCENT_BLUE,
+                    ThemeHelper.ACCENT_GREEN,
+                    ThemeHelper.ACCENT_RED,
+                    ThemeHelper.ACCENT_ORANGE,
+                    ThemeHelper.ACCENT_PINK,
+                    ThemeHelper.ACCENT_TEAL
+            };
+            String[] accentLabels = {
+                    getString(R.string.accent_monet),
+                    getString(R.string.accent_purple),
+                    getString(R.string.accent_blue),
+                    getString(R.string.accent_green),
+                    getString(R.string.accent_red),
+                    getString(R.string.accent_orange),
+                    getString(R.string.accent_pink),
+                    getString(R.string.accent_teal)
+            };
+            ArrayAdapter<String> accentAdapter = new ArrayAdapter<>(this,
+                    android.R.layout.simple_list_item_1, accentLabels);
+            dropdownAccentColor.setAdapter(accentAdapter);
+            String accent = ThemeHelper.getAccent(this);
+            int accentIndex = 0;
+            for (int i = 0; i < accentValues.length; i++) {
+                if (accentValues[i].equals(accent)) {
+                    accentIndex = i;
+                    break;
+                }
+            }
+            dropdownAccentColor.setText(accentLabels[accentIndex], false);
+            dropdownAccentColor.setOnItemClickListener((parent, view, position, id) -> {
+                String selected = accentValues[position];
+                if (!selected.equals(ThemeHelper.getAccent(this))) {
+                    prefs.edit().putString(ThemeHelper.PREF_ACCENT, selected).apply();
+                    recreate();
+                }
+            });
+        }
+
         if (dropdownKsuDisplay != null) {
             String[] labels = {
                     getString(R.string.ksu_display_card),

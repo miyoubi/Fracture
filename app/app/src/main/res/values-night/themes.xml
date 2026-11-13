@@ -19,4 +19,47 @@
         <item name="colorPrimaryContainer">#3A2F63</item>
         <item name="colorOnPrimaryContainer">#EDE6FF</item>
     </style>
+
+    <style name="ThemeOverlay.Fracture.Accent.Purple" parent="">
+        <item name="colorPrimary">#CFC4FF</item>
+        <item name="colorOnPrimary">#1A1A1A</item>
+        <item name="colorPrimaryContainer">#3A2F63</item>
+        <item name="colorOnPrimaryContainer">#EDE6FF</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Blue" parent="">
+        <item name="colorPrimary">#9CCAFF</item>
+        <item name="colorOnPrimary">#003258</item>
+        <item name="colorPrimaryContainer">#00497D</item>
+        <item name="colorOnPrimaryContainer">#D0E4FF</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Green" parent="">
+        <item name="colorPrimary">#A5D6A7</item>
+        <item name="colorOnPrimary">#003913</item>
+        <item name="colorPrimaryContainer">#1B5E20</item>
+        <item name="colorOnPrimaryContainer">#C8E6C9</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Red" parent="">
+        <item name="colorPrimary">#EF9A9A</item>
+        <item name="colorOnPrimary">#690005</item>
+        <item name="colorPrimaryContainer">#93000A</item>
+        <item name="colorOnPrimaryContainer">#FFCDD2</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Orange" parent="">
+        <item name="colorPrimary">#FFB74D</item>
+        <item name="colorOnPrimary">#4E2600</item>
+        <item name="colorPrimaryContainer">#8A4B00</item>
+        <item name="colorOnPrimaryContainer">#FFCCBC</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Pink" parent="">
+        <item name="colorPrimary">#F48FB1</item>
+        <item name="colorOnPrimary">#5E1133</item>
+        <item name="colorPrimaryContainer">#8C1D4E</item>
+        <item name="colorOnPrimaryContainer">#F8BBD0</item>
+    </style>
+    <style name="ThemeOverlay.Fracture.Accent.Teal" parent="">
+        <item name="colorPrimary">#80CBC4</item>
+        <item name="colorOnPrimary">#003731</item>
+        <item name="colorPrimaryContainer">#005048</item>
+        <item name="colorOnPrimaryContainer">#B2DFDB</item>
+    </style>
 </resources>
