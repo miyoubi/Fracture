@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+
 import com.google.android.material.color.DynamicColors;
 
 final class ThemeHelper {
@@ -19,10 +22,46 @@ final class ThemeHelper {
 
     private ThemeHelper() {}
 
+    static int accentColor(String accent) {
+        switch (accent) {
+            case ACCENT_MONET: return 0;
+            case ACCENT_BLUE: return Color.parseColor("#1565C0");
+            case ACCENT_GREEN: return Color.parseColor("#2E7D32");
+            case ACCENT_RED: return Color.parseColor("#C62828");
+            case ACCENT_ORANGE: return Color.parseColor("#E65100");
+            case ACCENT_PINK: return Color.parseColor("#AD1457");
+            case ACCENT_TEAL: return Color.parseColor("#00695C");
+            case ACCENT_PURPLE:
+            default: return Color.parseColor("#5B4D8A");
+        }
+    }
+
+    static GradientDrawable makeCircle(int color, int sizePx) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(color);
+        d.setSize(sizePx, sizePx);
+        return d;
+    }
+
+    static GradientDrawable makeMonetCircle(int sizePx) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColors(new int[]{
+                Color.parseColor("#4285F4"),
+                Color.parseColor("#34A853"),
+                Color.parseColor("#FBBC05"),
+                Color.parseColor("#EA4335")
+        });
+        d.setOrientation(GradientDrawable.Orientation.TL_BR);
+        d.setSize(sizePx, sizePx);
+        return d;
+    }
+
     static String getAccent(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE);
-        String v = prefs.getString(PREF_ACCENT, ACCENT_MONET);
-        return v == null ? ACCENT_MONET : v;
+        String v = prefs.getString(PREF_ACCENT, ACCENT_PURPLE);
+        return v == null ? ACCENT_PURPLE : v;
     }
 
     static void apply(Activity activity) {

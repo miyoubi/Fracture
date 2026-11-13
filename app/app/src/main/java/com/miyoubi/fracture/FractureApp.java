@@ -8,8 +8,11 @@ public final class FractureApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
-        if (ThemeHelper.ACCENT_MONET.equals(ThemeHelper.getAccent(this))) {
-            DynamicColors.applyToActivitiesIfAvailable(this);
-        }
+        DynamicColors.applyToActivitiesIfAvailable(
+                this,
+                new DynamicColorsOptions.Builder()
+                        .setPrecondition((activity, theme) ->
+                                ThemeHelper.ACCENT_MONET.equals(ThemeHelper.getAccent(activity)))
+                        .build());
     }
 }
