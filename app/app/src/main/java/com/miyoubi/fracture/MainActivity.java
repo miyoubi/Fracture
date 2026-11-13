@@ -445,6 +445,7 @@ public final class MainActivity extends AppCompatActivity {
         }
 
         if (btnRun != null) {
+            btnRun.setVisibility(View.VISIBLE);
             if (showButton) {
                 btnRun.setText(R.string.ksu_active_card);
                 btnRun.setEnabled(true);
@@ -468,6 +469,7 @@ public final class MainActivity extends AppCompatActivity {
                     btnRun.setTextColor(MaterialColors.getColor(btnRun,
                             com.google.android.material.R.attr.colorOnPrimary));
                 }
+                btnRun.setAlpha(1f);
                 btnRun.setOnClickListener(v -> runExploit());
             }
         }
@@ -585,15 +587,18 @@ public final class MainActivity extends AppCompatActivity {
     private void setBusy(boolean busy) {
         boolean supported = device != null && device.supported;
         boolean buttonModeActive = ksuModule && "button".equals(ksuActiveDisplayMode());
-        if (buttonModeActive) {
-            btnRun.setEnabled(true);
-            btnRun.setText(R.string.ksu_active_card);
-        } else {
-            btnRun.setEnabled(!busy && supported && shizukuReady && !ksuModule);
+        if (btnRun != null) {
+            btnRun.setVisibility(View.VISIBLE);
+            if (buttonModeActive) {
+                btnRun.setEnabled(true);
+                btnRun.setText(R.string.ksu_active_card);
+            } else {
+                btnRun.setEnabled(!busy && supported && shizukuReady && !ksuModule);
+            }
         }
-        btnShizuku.setEnabled(!busy);
-        progress.setVisibility(busy ? View.VISIBLE : View.GONE);
-        if (busy && prefs.getBoolean("keep_screen_on", false)) {
+        if (btnShizuku != null) btnShizuku.setEnabled(!busy);
+        if (progress != null) progress.setVisibility(busy ? View.VISIBLE : View.GONE);
+        if (busy && prefs != null && prefs.getBoolean("keep_screen_on", false)) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
