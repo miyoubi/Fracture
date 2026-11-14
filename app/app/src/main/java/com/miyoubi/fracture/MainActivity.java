@@ -74,6 +74,8 @@ public final class MainActivity extends AppCompatActivity {
     private MaterialButton btnShizuku;
     private View cardShizuku;
     private com.google.android.material.card.MaterialCardView cardOutput;
+    private View cardUpdate;
+    private TextView tvUpdateSubtitle;
     private boolean shizukuReady;
     private boolean ksuManager;
     private String ksuManagerPkg;
@@ -133,6 +135,12 @@ public final class MainActivity extends AppCompatActivity {
         btnShizuku = findViewById(R.id.btnShizuku);
         cardShizuku = findViewById(R.id.cardShizuku);
         cardOutput = findViewById(R.id.cardOutput);
+        cardUpdate = findViewById(R.id.cardUpdate);
+        tvUpdateSubtitle = findViewById(R.id.tvUpdateSubtitle);
+        if (cardUpdate != null) {
+            cardUpdate.setOnClickListener(v ->
+                    startActivity(new Intent(this, UpdateActivity.class)));
+        }
         applyPersonalization();
 
         View.OnClickListener ksuActiveClick = v -> {
@@ -247,21 +255,19 @@ public final class MainActivity extends AppCompatActivity {
 
     private void maybeAutoCheckUpdates() {
         if (prefs == null || !prefs.getBoolean("auto_check_updates", true)) return;
-        // check once per process/app launch
+        // check once per process/app launch, silently
         if (autoUpdateCheckedSession) return;
         autoUpdateCheckedSession = true;
         UpdateChecker.check(getApplicationContext(), result -> ui.post(() -> {
             if (isFinishing() || isDestroyed()) return;
             if (!result.updateAvailable || result.releaseError) return;
             String tag = result.latestTag != null ? result.latestTag : "";
-            new MaterialAlertDialogBuilder(this)
-                    .setTitle(R.string.update_available_title)
-                    .setMessage(getString(R.string.update_available_message, tag))
-                    .setPositiveButton(R.string.menu_updates, (d, w) ->
-                            startActivity(new Intent(this, UpdateActivity.class)))
-                    .setNeutralButton(R.string.update_open, (d, w) -> openReleasesPage(result.releaseUrl))
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show();
+            if (tvUpdateSubtitle != null) {
+                tvUpdateSubtitle.setText(getString(R.string.update_available_message, tag));
+            }
+            if (cardUpdate != null) {
+                cardUpdate.setVisibility(View.VISIBLE);
+            }
         }));
     }
 
