@@ -84,6 +84,7 @@ public final class MainActivity extends AppCompatActivity {
     private boolean ksuReceipt;
     private boolean managerLaunched;
     private boolean running;
+    private static boolean autoUpdateCheckedSession = false;
 
     private String appliedAccent;
 
@@ -247,8 +248,8 @@ public final class MainActivity extends AppCompatActivity {
     private void maybeAutoCheckUpdates() {
         if (prefs == null || !prefs.getBoolean("auto_check_updates", true)) return;
         // check once per process/app launch
-        if (prefs.getBoolean("auto_update_checked_session", false)) return;
-        prefs.edit().putBoolean("auto_update_checked_session", true).apply();
+        if (autoUpdateCheckedSession) return;
+        autoUpdateCheckedSession = true;
         UpdateChecker.check(getApplicationContext(), result -> ui.post(() -> {
             if (isFinishing() || isDestroyed()) return;
             if (!result.updateAvailable || result.releaseError) return;
