@@ -46,6 +46,12 @@
             android:label="@string/about_title"
             android:theme="@style/Theme.Fracture.NoActionBar" />
 
+        <activity
+            android:name=".UpdateActivity"
+            android:exported="false"
+            android:label="@string/updates_title"
+            android:theme="@style/Theme.Fracture.NoActionBar" />
+
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"

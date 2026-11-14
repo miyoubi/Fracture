@@ -158,6 +158,7 @@ public final class MainActivity extends AppCompatActivity {
         Shizuku.addRequestPermissionResultListener(permissionListener);
         rebuildLogView();
         updateShizuku();
+        maybeAutoCheckUpdates();
     }
 
     @Override
@@ -171,6 +172,7 @@ public final class MainActivity extends AppCompatActivity {
         applyPersonalization();
         rebuildLogView();
         updateShizuku();
+        maybeAutoCheckUpdates();
     }
 
     @Override
@@ -193,6 +195,7 @@ public final class MainActivity extends AppCompatActivity {
         View settings = content.findViewById(R.id.action_settings);
         View about = content.findViewById(R.id.action_about);
         View github = content.findViewById(R.id.action_github);
+        View updates = content.findViewById(R.id.action_updates);
         if (settings != null) {
             settings.setOnClickListener(v -> {
                 popup.dismiss();
@@ -211,6 +214,12 @@ public final class MainActivity extends AppCompatActivity {
                 openGithubPage();
             });
         }
+        if (updates != null) {
+            updates.setOnClickListener(v -> {
+                popup.dismiss();
+                startActivity(new Intent(this, UpdateActivity.class));
+            });
+        }
 
         content.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         int xoff = -(content.getMeasuredWidth() - anchor.getWidth());
@@ -224,6 +233,35 @@ public final class MainActivity extends AppCompatActivity {
             startActivity(intent);
         } catch (Exception ignored) {
         }
+    }
+
+    private void openReleasesPage(String url) {
+        String target = (url == null || url.isEmpty())
+                ? UpdateChecker.RELEASES_URL : url;
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(target)));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void maybeAutoCheckUpdates() {
+        if (prefs == null || !prefs.getBoolean("auto_check_updates", true)) return;
+        // check once per process/app launch
+        if (prefs.getBoolean("auto_update_checked_session", false)) return;
+        prefs.edit().putBoolean("auto_update_checked_session", true).apply();
+        UpdateChecker.check(getApplicationContext(), result -> ui.post(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (!result.updateAvailable || result.releaseError) return;
+            String tag = result.latestTag != null ? result.latestTag : "";
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.update_available_title)
+                    .setMessage(getString(R.string.update_available_message, tag))
+                    .setPositiveButton(R.string.menu_updates, (d, w) ->
+                            startActivity(new Intent(this, UpdateActivity.class)))
+                    .setNeutralButton(R.string.update_open, (d, w) -> openReleasesPage(result.releaseUrl))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }));
     }
 
     private void bindDevice() {

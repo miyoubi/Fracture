@@ -74,7 +74,7 @@
             android:background="?attr/colorOutlineVariant" />
 
         <TextView
-            android:id="@+id/action_check_updates"
+            android:id="@+id/action_updates"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="?attr/selectableItemBackground"
@@ -84,7 +84,7 @@
             android:paddingTop="14dp"
             android:paddingEnd="16dp"
             android:paddingBottom="14dp"
-            android:text="@string/menu_check_updates"
+            android:text="@string/menu_updates"
             android:textAppearance="?attr/textAppearanceBodyLarge"
             android:textColor="?attr/colorOnSurface" />
     </LinearLayout>
