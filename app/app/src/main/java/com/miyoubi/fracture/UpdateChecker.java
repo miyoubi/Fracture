@@ -19,6 +19,7 @@ final class UpdateChecker {
     static final String REPO = "miyoubi/CVE-2023-33107";
     static final String RELEASES_URL = "https://github.com/" + REPO + "/releases";
     private static final String API_LATEST = "https://api.github.com/repos/" + REPO + "/releases/latest";
+    private static final String API_RELEASES = "https://api.github.com/repos/" + REPO + "/releases?per_page=10";
     private static final String API_COMMITS = "https://api.github.com/repos/" + REPO + "/commits?per_page=7";
     private static final Pattern VER = Pattern.compile("(\\d+)");
 
@@ -77,22 +78,43 @@ final class UpdateChecker {
 
     static Result fetch(Context ctx) {
         String current = getCurrentVersion(ctx);
+        boolean includePrereleases = false;
+        try {
+            includePrereleases = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+                    .getBoolean("include_prereleases", false);
+        } catch (Exception ignored) {
+        }
         String latestTag = null, releaseUrl = RELEASES_URL, releaseName = null, releaseBody = null, publishedAt = null;
         boolean updateAvailable = false, releaseError = false, commitsError = false;
         List<CommitInfo> commits = new ArrayList<>();
 
         // Latest release
         try {
-            String json = httpGet(API_LATEST);
-            if (json != null) {
-                JSONObject obj = new JSONObject(json);
+            JSONObject obj = null;
+            if (includePrereleases) {
+                String json = httpGet(API_RELEASES);
+                if (json != null) {
+                    JSONArray arr = new JSONArray(json);
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject r = arr.optJSONObject(i);
+                        if (r == null) continue;
+                        if (r.optBoolean("draft", false)) continue;
+                        obj = r;
+                        break;
+                    }
+                }
+            } else {
+                String json = httpGet(API_LATEST);
+                if (json != null) obj = new JSONObject(json);
+            }
+            if (obj != null) {
                 latestTag = optStr(obj, "tag_name");
                 releaseUrl = optStr(obj, "html_url");
                 if (releaseUrl == null || releaseUrl.isEmpty()) releaseUrl = RELEASES_URL;
                 releaseName = optStr(obj, "name");
                 releaseBody = optStr(obj, "body");
                 publishedAt = optStr(obj, "published_at");
-                updateAvailable = isNewer(latestTag, current);
+                updateAvailable = isNewer(latestTag, current, includePrereleases);
             } else {
                 releaseError = true;
             }
@@ -184,6 +206,10 @@ final class UpdateChecker {
     }
 
     static boolean isNewer(String latestTag, String currentVersion) {
+        return isNewer(latestTag, currentVersion, false);
+    }
+
+    static boolean isNewer(String latestTag, String currentVersion, boolean includePrereleases) {
         if (latestTag == null) return false;
         int[] l = parse(latestTag);
         int[] c = parse(currentVersion);
@@ -194,7 +220,19 @@ final class UpdateChecker {
             if (lv > cv) return true;
             if (lv < cv) return false;
         }
+        if (includePrereleases) {
+            String ln = normalizeTag(latestTag);
+            String cn = normalizeTag(currentVersion);
+            if (ln != null && !ln.equals(cn)) return true;
+        }
         return false;
+    }
+
+    private static String normalizeTag(String v) {
+        if (v == null) return null;
+        String s = v.trim();
+        if (s.startsWith("v") || s.startsWith("V")) s = s.substring(1);
+        return s;
     }
 
     private static int[] parse(String v) {
