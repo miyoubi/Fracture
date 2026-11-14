@@ -19,7 +19,7 @@ final class UpdateChecker {
     static final String REPO = "miyoubi/CVE-2023-33107";
     static final String RELEASES_URL = "https://github.com/" + REPO + "/releases";
     private static final String API_LATEST = "https://api.github.com/repos/" + REPO + "/releases/latest";
-    private static final String API_COMMITS = "https://api.github.com/repos/" + REPO + "/commits?per_page=25";
+    private static final String API_COMMITS = "https://api.github.com/repos/" + REPO + "/commits?per_page=7";
     private static final Pattern VER = Pattern.compile("(\\d+)");
 
     interface Callback {
