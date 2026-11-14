@@ -39,6 +39,7 @@ public final class SettingsActivity extends AppCompatActivity {
         AutoCompleteTextView dropdownKsuDisplay = findViewById(R.id.dropdownKsuDisplay);
         MaterialSwitch switchHideShizuku = findViewById(R.id.switchHideShizuku);
         MaterialSwitch switchAutoCheckUpdates = findViewById(R.id.switchAutoCheckUpdates);
+        MaterialSwitch switchIncludePrereleases = findViewById(R.id.switchIncludePrereleases);
 
         boolean ksu = prefs.getBoolean("ksu", true);
         boolean reboot = prefs.getBoolean("reboot", false);
@@ -63,6 +64,11 @@ public final class SettingsActivity extends AppCompatActivity {
             switchAutoCheckUpdates.setChecked(prefs.getBoolean("auto_check_updates", true));
             switchAutoCheckUpdates.setOnCheckedChangeListener((button, checked) ->
                     prefs.edit().putBoolean("auto_check_updates", checked).apply());
+        }
+        if (switchIncludePrereleases != null) {
+            switchIncludePrereleases.setChecked(prefs.getBoolean("include_prereleases", false));
+            switchIncludePrereleases.setOnCheckedChangeListener((button, checked) ->
+                    prefs.edit().putBoolean("include_prereleases", checked).apply());
         }
 
         AutoCompleteTextView dropdownAccentColor = findViewById(R.id.dropdownAccentColor);
