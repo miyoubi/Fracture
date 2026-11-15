@@ -65,6 +65,14 @@ static const struct target_profile g_profiles[] = {
         .gadget_store_off = 0x424350ULL,
     },
     {
+        .model = "SO51Aa",
+        .build = "58.2.B.0.520",
+        .fingerprint = "SO51Aa/58.2.B.0.520",
+        COMMON_PROFILE_FIELDS,
+        .selinux_state_off = 0x31ae000ULL,
+        .gadget_store_off = 0x424350ULL,
+    },
+    {
         .model = "SOG01",
         .build = "58.2.C.5.10",
         .fingerprint = "SOG01/58.2.C.5.10",

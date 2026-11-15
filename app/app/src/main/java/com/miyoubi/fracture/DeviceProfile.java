@@ -31,6 +31,7 @@ final class DeviceProfile {
         switch (model + "|" + build) {
             case "SOG02|58.2.C.3.127": return "sog02-58.2.C.3.127";
             case "SO-51A|58.2.B.0.520": return "so-51a-58.2.B.0.520";
+            case "SO51Aa|58.2.B.0.520": return "so-51a-58.2.B.0.520";
             case "SO-52A|58.2.B.0.520": return "so-52a-58.2.B.0.520";
             case "SOG01|58.2.C.5.10": return "sog01-58.2.C.5.10";
             case "XQ-AT42|58.2.A.10.102": return "unified";
@@ -44,6 +45,8 @@ final class DeviceProfile {
             default: break;
         }
         switch (model) {
+            case "SO51Aa":
+                return "so-51a-58.2.B.0.520";
             case "XQ-AT42":
             case "XQ-AT51":
             case "XQ-AT52":

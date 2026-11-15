@@ -24,6 +24,7 @@ The card shows the model, build, Android version, kernel, and a
 | --- | --- | --- |
 | `sog02-58.2.C.3.127` | SOG02 | 58.2.C.3.127 |
 | `so-51a-58.2.B.0.520` | SO-51A | 58.2.B.0.520 |
+| `so-51a-58.2.B.0.520` | SO51Aa | 58.2.B.0.520 |
 | `so-52a-58.2.B.0.520` | SO-52A | 58.2.B.0.520 |
 | `sog01-58.2.C.5.10` | SOG01 | 58.2.C.5.10 |
 
