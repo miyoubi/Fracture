@@ -260,10 +260,18 @@ public final class MainActivity extends AppCompatActivity {
         autoUpdateCheckedSession = true;
         UpdateChecker.check(getApplicationContext(), result -> ui.post(() -> {
             if (isFinishing() || isDestroyed()) return;
-            if (!result.updateAvailable || result.releaseError) return;
-            String tag = result.latestTag != null ? result.latestTag : "";
+            if (!result.updateAvailable) return;
+            if (result.commitBased ? result.commitsError : result.releaseError) return;
+            String label;
+            if (result.commitBased) {
+                String c = result.latestCommitSha != null ? result.latestCommitSha : "";
+                label = getString(R.string.update_available_commit_message, c);
+            } else {
+                String tag = result.latestTag != null ? result.latestTag : "";
+                label = getString(R.string.update_available_message, tag);
+            }
             if (tvUpdateSubtitle != null) {
-                tvUpdateSubtitle.setText(getString(R.string.update_available_message, tag));
+                tvUpdateSubtitle.setText(label);
             }
             if (cardUpdate != null) {
                 cardUpdate.setVisibility(View.VISIBLE);

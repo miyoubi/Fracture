@@ -81,17 +81,19 @@
     <string name="update_latest">You\'re up to date</string>
     <string name="update_failed">Couldn\'t check for updates</string>
     <string name="update_open">Open releases</string>
+    <string name="update_available_commit_message">A newer build (%1$s) is available.</string>
     <string name="update_unknown">Unknown</string>
     <string name="update_current_version">Current version: %1$s</string>
     <string name="update_latest_version">Latest release: %1$s</string>
+    <string name="update_latest_commit">Latest commit: %1$s</string>
     <string name="update_release_notes">Release notes</string>
     <string name="update_changelog">Changelog (recent commits)</string>
     <string name="update_changelog_empty">No commits found</string>
 
     <string name="auto_check_updates">Check for updates on launch</string>
     <string name="auto_check_updates_desc">Automatically check for new releases when the app opens</string>
-    <string name="include_prereleases">Include pre-release updates</string>
-    <string name="include_prereleases_desc">Also check nightly and pre-release builds</string>
+    <string name="include_prereleases">Include pre-release/nightly updates</string>
+    <string name="include_prereleases_desc">Track latest commits (nightly) and pre-release builds</string>
 
     <string name="settings_title">Settings</string>
     <string name="ksu_status">KernelSU status</string>

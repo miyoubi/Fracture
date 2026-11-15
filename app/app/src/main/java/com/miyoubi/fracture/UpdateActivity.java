@@ -73,19 +73,36 @@ public final class UpdateActivity extends AppCompatActivity {
 
         if (tvCurrent != null) {
             String cur = r.currentVersion != null ? r.currentVersion : "0";
+            if (r.commitBased && r.currentBuild != null && !r.currentBuild.isEmpty()
+                    && !"unknown".equalsIgnoreCase(r.currentBuild)) {
+                cur = cur + " (" + r.currentBuild + ")";
+            }
             tvCurrent.setText(getString(R.string.update_current_version, cur));
         }
         if (tvLatest != null) {
-            String tag = r.latestTag != null ? r.latestTag : getString(R.string.update_unknown);
-            String name = r.releaseName != null && !r.releaseName.equals(r.latestTag) ? " (" + r.releaseName + ")" : "";
-            tvLatest.setText(getString(R.string.update_latest_version, tag + name));
+            String latest;
+            if (r.commitBased) {
+                String c = r.latestCommitSha != null ? r.latestCommitSha : getString(R.string.update_unknown);
+                latest = getString(R.string.update_latest_commit, c);
+            } else {
+                String tag = r.latestTag != null ? r.latestTag : getString(R.string.update_unknown);
+                String name = r.releaseName != null && !r.releaseName.equals(r.latestTag) ? " (" + r.releaseName + ")" : "";
+                latest = getString(R.string.update_latest_version, tag + name);
+            }
+            tvLatest.setText(latest);
         }
         if (tvStatus != null) {
-            if (r.releaseError && r.latestTag == null) {
+            if (r.commitBased ? (r.commitsError || r.latestCommitSha == null)
+                    : (r.releaseError && r.latestTag == null)) {
                 tvStatus.setText(R.string.update_failed);
             } else if (r.updateAvailable) {
-                String tag = r.latestTag != null ? r.latestTag : "";
-                tvStatus.setText(getString(R.string.update_available_message, tag));
+                if (r.commitBased) {
+                    String c = r.latestCommitSha != null ? r.latestCommitSha : "";
+                    tvStatus.setText(getString(R.string.update_available_commit_message, c));
+                } else {
+                    String tag = r.latestTag != null ? r.latestTag : "";
+                    tvStatus.setText(getString(R.string.update_available_message, tag));
+                }
             } else {
                 tvStatus.setText(R.string.update_latest);
             }

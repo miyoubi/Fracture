@@ -28,12 +28,14 @@ final class UpdateChecker {
     }
 
     static final class CommitInfo {
-        final String sha;
+        final String sha;      // short, for display
+        final String fullSha;
         final String message;
         final String date;
         final String author;
-        CommitInfo(String sha, String message, String date, String author) {
+        CommitInfo(String sha, String fullSha, String message, String date, String author) {
             this.sha = sha;
+            this.fullSha = fullSha;
             this.message = message;
             this.date = date;
             this.author = author;
@@ -48,13 +50,17 @@ final class UpdateChecker {
         final String releaseBody;
         final String publishedAt;
         final String currentVersion;
+        final String currentBuild;
         final List<CommitInfo> commits;
         final boolean releaseError;
         final boolean commitsError;
+        final boolean commitBased;
+        final String latestCommitSha; // short
 
         Result(boolean updateAvailable, String latestTag, String releaseUrl, String releaseName,
-               String releaseBody, String publishedAt, String currentVersion,
-               List<CommitInfo> commits, boolean releaseError, boolean commitsError) {
+               String releaseBody, String publishedAt, String currentVersion, String currentBuild,
+               List<CommitInfo> commits, boolean releaseError, boolean commitsError,
+               boolean commitBased, String latestCommitSha) {
             this.updateAvailable = updateAvailable;
             this.latestTag = latestTag;
             this.releaseUrl = releaseUrl;
@@ -62,9 +68,12 @@ final class UpdateChecker {
             this.releaseBody = releaseBody;
             this.publishedAt = publishedAt;
             this.currentVersion = currentVersion;
+            this.currentBuild = currentBuild;
             this.commits = commits;
             this.releaseError = releaseError;
             this.commitsError = commitsError;
+            this.commitBased = commitBased;
+            this.latestCommitSha = latestCommitSha;
         }
 
         boolean hasError() { return releaseError && commitsError; }
@@ -78,6 +87,7 @@ final class UpdateChecker {
 
     static Result fetch(Context ctx) {
         String current = getCurrentVersion(ctx);
+        String currentBuild = BuildConfig.GIT_SHA;
         boolean includePrereleases = false;
         try {
             includePrereleases = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -86,9 +96,11 @@ final class UpdateChecker {
         }
         String latestTag = null, releaseUrl = RELEASES_URL, releaseName = null, releaseBody = null, publishedAt = null;
         boolean updateAvailable = false, releaseError = false, commitsError = false;
+        boolean commitBased = false;
+        String latestCommitSha = null;
         List<CommitInfo> commits = new ArrayList<>();
 
-        // Latest release
+        // Latest release (stable: primary comparison; nightly/pre-release: metadata/fallback)
         try {
             JSONObject obj = null;
             if (includePrereleases) {
@@ -114,7 +126,9 @@ final class UpdateChecker {
                 releaseName = optStr(obj, "name");
                 releaseBody = optStr(obj, "body");
                 publishedAt = optStr(obj, "published_at");
-                updateAvailable = isNewer(latestTag, current, includePrereleases);
+                if (!includePrereleases) {
+                    updateAvailable = isNewer(latestTag, current, false);
+                }
             } else {
                 releaseError = true;
             }
@@ -122,7 +136,7 @@ final class UpdateChecker {
             releaseError = true;
         }
 
-        // Commits (changelog)
+        // Commits (changelog; nightly/pre-release: primary comparison)
         try {
             String json = httpGet(API_COMMITS);
             if (json != null) {
@@ -130,7 +144,8 @@ final class UpdateChecker {
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject c = arr.optJSONObject(i);
                     if (c == null) continue;
-                    String sha = optStr(c, "sha");
+                    String fullSha = optStr(c, "sha");
+                    String sha = fullSha;
                     if (sha != null && sha.length() > 7) sha = sha.substring(0, 7);
                     String msg = null, date = null, author = null;
                     JSONObject commit = c.optJSONObject("commit");
@@ -152,7 +167,7 @@ final class UpdateChecker {
                         if (au != null) author = optStr(au, "login");
                     }
                     if (msg != null || sha != null) {
-                        commits.add(new CommitInfo(sha != null ? sha : "", msg != null ? msg : "", date, author));
+                        commits.add(new CommitInfo(sha != null ? sha : "", fullSha, msg != null ? msg : "", date, author));
                     }
                 }
             } else {
@@ -162,8 +177,27 @@ final class UpdateChecker {
             commitsError = true;
         }
 
+        // Nightly/pre-release mode: compare against latest commit when possible
+        if (includePrereleases) {
+            if (!commits.isEmpty() && isValidBuildSha(currentBuild)) {
+                CommitInfo head = commits.get(0);
+                latestCommitSha = head.sha;
+                commitBased = true;
+                updateAvailable = !isSameCommit(head.fullSha, currentBuild);
+                if (latestCommitSha != null && !latestCommitSha.isEmpty()) {
+                    latestTag = latestCommitSha;
+                }
+                if (head.message != null && !head.message.isEmpty()) {
+                    releaseName = head.message;
+                }
+            } else {
+                updateAvailable = isNewer(latestTag, current, true);
+            }
+        }
+
         return new Result(updateAvailable, latestTag, releaseUrl, releaseName, releaseBody,
-                publishedAt, current, commits, releaseError, commitsError);
+                publishedAt, current, currentBuild, commits, releaseError, commitsError,
+                commitBased, latestCommitSha);
     }
 
     private static String httpGet(String urlStr) throws Exception {
@@ -196,6 +230,18 @@ final class UpdateChecker {
         } catch (Exception ignored) {
         }
         return "0";
+    }
+
+    private static boolean isValidBuildSha(String sha) {
+        return sha != null && !sha.isEmpty() && !"unknown".equalsIgnoreCase(sha);
+    }
+
+    private static boolean isSameCommit(String remoteFull, String localBuildSha) {
+        if (remoteFull == null || localBuildSha == null) return false;
+        String r = remoteFull.trim().toLowerCase();
+        String l = localBuildSha.trim().toLowerCase();
+        if (r.isEmpty() || l.isEmpty()) return false;
+        return r.startsWith(l) || l.startsWith(r) || r.equals(l);
     }
 
     private static String optStr(JSONObject obj, String key) {
