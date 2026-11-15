@@ -46,6 +46,7 @@ final class UpdateChecker {
         final boolean updateAvailable;
         final String latestTag;
         final String releaseUrl;
+        final String downloadUrl;
         final String releaseName;
         final String releaseBody;
         final String publishedAt;
@@ -57,13 +58,14 @@ final class UpdateChecker {
         final boolean commitBased;
         final String latestCommitSha; // short
 
-        Result(boolean updateAvailable, String latestTag, String releaseUrl, String releaseName,
+        Result(boolean updateAvailable, String latestTag, String releaseUrl, String downloadUrl, String releaseName,
                String releaseBody, String publishedAt, String currentVersion, String currentBuild,
                List<CommitInfo> commits, boolean releaseError, boolean commitsError,
                boolean commitBased, String latestCommitSha) {
             this.updateAvailable = updateAvailable;
             this.latestTag = latestTag;
             this.releaseUrl = releaseUrl;
+            this.downloadUrl = downloadUrl;
             this.releaseName = releaseName;
             this.releaseBody = releaseBody;
             this.publishedAt = publishedAt;
@@ -94,7 +96,7 @@ final class UpdateChecker {
                     .getBoolean("include_prereleases", false);
         } catch (Exception ignored) {
         }
-        String latestTag = null, releaseUrl = RELEASES_URL, releaseName = null, releaseBody = null, publishedAt = null;
+        String latestTag = null, releaseUrl = RELEASES_URL, downloadUrl = null, releaseName = null, releaseBody = null, publishedAt = null;
         boolean updateAvailable = false, releaseError = false, commitsError = false;
         boolean commitBased = false;
         String latestCommitSha = null;
@@ -123,6 +125,7 @@ final class UpdateChecker {
                 latestTag = optStr(obj, "tag_name");
                 releaseUrl = optStr(obj, "html_url");
                 if (releaseUrl == null || releaseUrl.isEmpty()) releaseUrl = RELEASES_URL;
+                downloadUrl = pickDownloadUrl(obj);
                 releaseName = optStr(obj, "name");
                 releaseBody = optStr(obj, "body");
                 publishedAt = optStr(obj, "published_at");
@@ -195,7 +198,7 @@ final class UpdateChecker {
             }
         }
 
-        return new Result(updateAvailable, latestTag, releaseUrl, releaseName, releaseBody,
+        return new Result(updateAvailable, latestTag, releaseUrl, downloadUrl, releaseName, releaseBody,
                 publishedAt, current, currentBuild, commits, releaseError, commitsError,
                 commitBased, latestCommitSha);
     }
@@ -242,6 +245,23 @@ final class UpdateChecker {
         String l = localBuildSha.trim().toLowerCase();
         if (r.isEmpty() || l.isEmpty()) return false;
         return r.startsWith(l) || l.startsWith(r) || r.equals(l);
+    }
+
+    private static String pickDownloadUrl(JSONObject releaseObj) {
+        if (releaseObj == null) return null;
+        JSONArray assets = releaseObj.optJSONArray("assets");
+        if (assets == null || assets.length() == 0) return null;
+        String fallback = null;
+        for (int i = 0; i < assets.length(); i++) {
+            JSONObject a = assets.optJSONObject(i);
+            if (a == null) continue;
+            String url = optStr(a, "browser_download_url");
+            if (url == null) continue;
+            String name = optStr(a, "name");
+            if (fallback == null) fallback = url;
+            if (name != null && name.toLowerCase().endsWith(".apk")) return url;
+        }
+        return fallback;
     }
 
     private static String optStr(JSONObject obj, String key) {
