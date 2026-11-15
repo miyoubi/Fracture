@@ -29,6 +29,7 @@ public final class UpdateActivity extends AppCompatActivity {
     private ProgressBar progress;
     private MaterialButton btnOpenRelease;
     private String releaseUrl = UpdateChecker.RELEASES_URL;
+    private String downloadUrl = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,7 +52,8 @@ public final class UpdateActivity extends AppCompatActivity {
         btnOpenRelease = findViewById(R.id.btnOpenRelease);
 
         if (btnOpenRelease != null) {
-            btnOpenRelease.setOnClickListener(v -> openUrl(releaseUrl));
+            btnOpenRelease.setOnClickListener(v ->
+                    openUrl(downloadUrl != null && !downloadUrl.isEmpty() ? downloadUrl : releaseUrl));
         }
 
         refresh();
@@ -70,6 +72,7 @@ public final class UpdateActivity extends AppCompatActivity {
         if (btnOpenRelease != null) btnOpenRelease.setEnabled(true);
 
         releaseUrl = r.releaseUrl != null ? r.releaseUrl : UpdateChecker.RELEASES_URL;
+        downloadUrl = r.downloadUrl;
 
         if (tvCurrent != null) {
             String cur = r.currentVersion != null ? r.currentVersion : "0";

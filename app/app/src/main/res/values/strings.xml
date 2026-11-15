@@ -80,7 +80,7 @@
     <string name="update_available_message">A new version (%1$s) is available.</string>
     <string name="update_latest">You\'re up to date</string>
     <string name="update_failed">Couldn\'t check for updates</string>
-    <string name="update_open">Open releases</string>
+    <string name="update_open">Download</string>
     <string name="update_available_commit_message">A newer build (%1$s) is available.</string>
     <string name="update_unknown">Unknown</string>
     <string name="update_current_version">Current version: %1$s</string>
