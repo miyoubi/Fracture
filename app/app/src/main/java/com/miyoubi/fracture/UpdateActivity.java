@@ -62,14 +62,21 @@ public final class UpdateActivity extends AppCompatActivity {
     private void refresh() {
         if (progress != null) progress.setVisibility(View.VISIBLE);
         if (tvStatus != null) tvStatus.setText(R.string.update_checking);
-        if (btnOpenRelease != null) btnOpenRelease.setEnabled(false);
+        if (btnOpenRelease != null) {
+            btnOpenRelease.setEnabled(false);
+            btnOpenRelease.setVisibility(View.GONE);
+        }
         UpdateChecker.check(getApplicationContext(), result -> ui.post(() -> bind(result)));
     }
 
     private void bind(UpdateChecker.Result r) {
         if (isFinishing() || isDestroyed()) return;
         if (progress != null) progress.setVisibility(View.GONE);
-        if (btnOpenRelease != null) btnOpenRelease.setEnabled(true);
+        if (btnOpenRelease != null) {
+            boolean showDownload = r.updateAvailable;
+            btnOpenRelease.setVisibility(showDownload ? View.VISIBLE : View.GONE);
+            btnOpenRelease.setEnabled(showDownload);
+        }
 
         releaseUrl = r.releaseUrl != null ? r.releaseUrl : UpdateChecker.RELEASES_URL;
         downloadUrl = r.downloadUrl;
