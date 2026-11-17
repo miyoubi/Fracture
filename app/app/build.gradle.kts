@@ -28,21 +28,6 @@ val ksuVersion: String = run {
         "unknown"
     }
 }
-val ksuBuild: String = run {
-    try {
-        if (ksuDir.isDirectory) {
-            val proc = ProcessBuilder("git", "describe", "--tags", "--always")
-                .directory(ksuDir)
-                .redirectErrorStream(true)
-                .start()
-            val out = proc.inputStream.bufferedReader().readText().trim()
-            proc.waitFor()
-            if (proc.exitValue() == 0 && out.isNotEmpty()) out else "unknown"
-        } else "unknown"
-    } catch (_: Exception) {
-        "unknown"
-    }
-}
 val profiles = listOf(
     "sog02-58.2.C.3.127",
     "so-51a-58.2.B.0.520",
@@ -62,7 +47,6 @@ android {
         versionName = "2.0.6"
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         buildConfigField("String", "KSU_VERSION", "\"$ksuVersion\"")
-        buildConfigField("String", "KSU_BUILD", "\"$ksuBuild\"")
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=none")

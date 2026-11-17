@@ -119,7 +119,7 @@
     <string name="about_project">Project</string>
     <string name="about_source_code">Source code</string>
     <string name="about_repo">https://github.com/miyoubi/CVE-2023-33107</string>
-    <string name="about_bundled_kernelsu">Bundled KernelSU</string>
+    <string name="about_kernelsu">KernelSU</string>
     <string name="about_made_by">Made by</string>
     <string name="about_made_by_exer_title">exer</string>
     <string name="about_made_by_exer">https://github.com/ekkusa</string>
