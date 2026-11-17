@@ -31,8 +31,8 @@ android {
         applicationId = "com.miyoubi.fracture"
         minSdk = 31
         targetSdk = 34
-        versionCode = 6
-        versionName = "2.0.5"
+        versionCode = 7
+        versionName = "2.0.6"
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         externalNativeBuild {
             cmake {
