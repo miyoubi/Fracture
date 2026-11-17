@@ -16,6 +16,33 @@ val gitSha: String = run {
         "unknown"
     }
 }
+val ksuDir = File(repoRoot, "KernelSU")
+val ksuVersion: String = run {
+    try {
+        val mk = File(ksuDir, "kernel/Makefile")
+        if (mk.isFile) {
+            val re = Regex("^CFLAGS_ksu\\.o \\+= -DKSU_VERSION=(\\d+)", RegexOption.MULTILINE)
+            re.find(mk.readText())?.groupValues?.get(1) ?: "unknown"
+        } else "unknown"
+    } catch (_: Exception) {
+        "unknown"
+    }
+}
+val ksuBuild: String = run {
+    try {
+        if (ksuDir.isDirectory) {
+            val proc = ProcessBuilder("git", "describe", "--tags", "--always")
+                .directory(ksuDir)
+                .redirectErrorStream(true)
+                .start()
+            val out = proc.inputStream.bufferedReader().readText().trim()
+            proc.waitFor()
+            if (proc.exitValue() == 0 && out.isNotEmpty()) out else "unknown"
+        } else "unknown"
+    } catch (_: Exception) {
+        "unknown"
+    }
+}
 val profiles = listOf(
     "sog02-58.2.C.3.127",
     "so-51a-58.2.B.0.520",
@@ -34,6 +61,8 @@ android {
         versionCode = 7
         versionName = "2.0.6"
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+        buildConfigField("String", "KSU_VERSION", "\"$ksuVersion\"")
+        buildConfigField("String", "KSU_BUILD", "\"$ksuBuild\"")
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=none")

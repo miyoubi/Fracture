@@ -43,6 +43,25 @@ public final class AboutActivity extends AppCompatActivity {
         } else {
             tvVersion.setText(getString(R.string.about_version, versionName, versionCode));
         }
+
+        TextView tvBundledKsu = findViewById(R.id.tvBundledKsu);
+        if (tvBundledKsu != null) {
+            String ksuVer = BuildConfig.KSU_VERSION;
+            String ksuBuild = BuildConfig.KSU_BUILD;
+            boolean hasVer = ksuVer != null && !ksuVer.isEmpty() && !"unknown".equals(ksuVer);
+            boolean hasBuild = ksuBuild != null && !ksuBuild.isEmpty() && !"unknown".equals(ksuBuild);
+            String text;
+            if (hasVer && hasBuild) {
+                text = ksuVer + " (" + ksuBuild + ")";
+            } else if (hasVer) {
+                text = ksuVer;
+            } else if (hasBuild) {
+                text = ksuBuild;
+            } else {
+                text = getString(R.string.update_unknown);
+            }
+            tvBundledKsu.setText(text);
+        }
     }
 
     private void bindLink(int viewId, int urlResId) {
