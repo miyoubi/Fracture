@@ -149,7 +149,9 @@ elif [ "$KSU_REF_GIVEN" = 1 ]; then
     fi
 fi
 KSU_REV=$(git -C "$KSU_DIR" rev-parse --short HEAD)
-log "KernelSU $KSU_REV ($(git -C "$KSU_DIR" describe --tags --always 2>/dev/null || echo "$KSU_REV"))"
+KSU_DESC=$(git -C "$KSU_DIR" describe --tags --always 2>/dev/null || echo "$KSU_REV")
+KSU_VER=$(sed -n 's/^CFLAGS_ksu.o += -DKSU_VERSION=\([0-9][0-9]*\).*/\1/p' "$KSU_DIR/kernel/Makefile" | head -n1)
+log "KernelSU version: ${KSU_VER:-unknown} (${KSU_DESC}, $KSU_REV)"
 
 # 2. Wire the module into the stock tree
 mkdir -p "$KERNEL_DIR/KernelSU"
@@ -257,4 +259,4 @@ fi
 mkdir -p "$OUT"
 cp "$KO" "$OUT/kernelsu.ko"
 log "built $OUT/kernelsu.ko"
-log "KernelSU $KSU_REV, $(stat -c %s "$OUT/kernelsu.ko") bytes, md5 $(md5sum "$OUT/kernelsu.ko" | cut -d' ' -f1)"
+log "KernelSU ${KSU_VER:-unknown} (${KSU_DESC}, $KSU_REV), $(stat -c %s "$OUT/kernelsu.ko") bytes, md5 $(md5sum "$OUT/kernelsu.ko" | cut -d' ' -f1)"
